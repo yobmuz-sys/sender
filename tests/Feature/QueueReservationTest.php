@@ -136,4 +136,73 @@ class QueueReservationTest extends TestCase
 
         $this->assertNotContains('queue reservation window', $names);
     }
+
+    /**
+     * The documented variable and the consumed variable had drifted apart:
+     * `.env.example` told operators to set `QUEUE_RETRY_AFTER` while
+     * `config/queue.php` read `DB_QUEUE_RETRY_AFTER`. An operator following the
+     * documentation changed nothing and would never have known why.
+     */
+    public function test_the_documented_environment_variable_is_the_one_actually_read(): void
+    {
+        $source = (string) file_get_contents(config_path('queue.php'));
+
+        $this->assertStringContainsString(
+            "env('DB_QUEUE_RETRY_AFTER'",
+            $source,
+            'config/queue.php must read the database connection reservation window',
+        );
+
+        $documented = (string) file_get_contents(base_path('.env.example'));
+
+        $this->assertStringContainsString(
+            'DB_QUEUE_RETRY_AFTER',
+            $documented,
+            '.env.example must document the variable the configuration reads',
+        );
+
+        // The unprefixed name must not survive anywhere in the documentation,
+        // because that is the one an operator would copy into .env.
+        foreach (glob(base_path('docs/*.md')) ?: [] as $file) {
+            $text = (string) file_get_contents($file);
+
+            $this->assertStringNotContainsStringIgnoringCase(
+                'QUEUE_RETRY_AFTER',
+                str_replace('DB_QUEUE_RETRY_AFTER', '', $text),
+                basename($file).' documents a retry_after variable that config/queue.php does not read',
+            );
+        }
+    }
+
+    /**
+     * The extraction request ceiling is only meaningful relative to the worker
+     * budget: seeding more URLs than the runtime can fetch produces a timeout
+     * and a partial result instead of an honest failure.
+     */
+    public function test_a_seed_batch_can_actually_finish_inside_the_worker_runtime(): void
+    {
+        $urls = DeploymentLimit::MaxUrlsPerRequest->value();
+        $runtime = DeploymentLimit::MaxWorkerRuntimeSeconds->value();
+
+        // Two seconds per fetch is pessimistic for a page fetch that has already
+        // paid for DNS and TLS, and still has to leave time for the request to
+        // finish rather than being killed mid-batch.
+        $this->assertLessThanOrEqual(
+            intdiv($runtime, 2),
+            $urls,
+            'the shipped seed ceiling cannot finish inside the worker runtime',
+        );
+    }
+
+    public function test_pasted_text_ceiling_is_conservative_for_shared_hosting(): void
+    {
+        $bytes = DeploymentLimit::MaxTextInputBytes->value();
+
+        $this->assertGreaterThan(0, $bytes);
+        $this->assertLessThanOrEqual(
+            1024 * 1024,
+            $bytes,
+            'pasted text ceiling should stay at or below 1 MiB on shared hosting',
+        );
+    }
 }
