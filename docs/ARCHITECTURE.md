@@ -173,16 +173,24 @@ fail the installation; an `UNKNOWN` capability that is required does.
 
 | Subject | Established by | State today |
 | --- | --- | --- |
-| `cron` | an observed `sender:heartbeat` | `UNKNOWN` until cron runs |
+| `cron` | durable evidence of a completed scheduled run | `UNKNOWN` until a run is recorded |
 | `storage` | writable paths and free disk | `READY` on a healthy host |
-| `queue` | the queue driver and its table | `READY` on the `database` driver |
+| `queue` | the queue driver, its table, and the reservation invariant | `READY` when configured safely |
 | `url_fetch` | code that performs a fetch | `UNKNOWN` — no such code yet |
-| `smtp` | code that performs a delivery | `UNKNOWN` — no such code yet |
+| `smtp` | a recorded `sender:verify-smtp` result | `UNKNOWN` until verified |
 
 The split is deliberate. `storage` and `queue` are `READY` because the existing
 checks *are* their prerequisites — a writable directory is what file storage
-requires. `url_fetch` and `smtp` are `UNKNOWN` because no extension check can
-establish that a fetch or a delivery would actually succeed.
+requires. `url_fetch` is `UNKNOWN` because no extension check can establish that
+a fetch would actually succeed. `smtp` is `UNKNOWN` for a different reason: no
+extension check or configuration read can establish that a delivery would
+succeed, so it is established by running the verification.
+
+Note that `smtp` and the "transactional mailer" check are different things. The
+mailer check is untagged and reports `DEGRADED`, because the `log` mailer is
+correct in development and a check that failed every developer machine would be
+ignored everywhere. The capability stays `UNKNOWN`. Confusing the two would let
+a discarded transport be reported as a working one.
 
 ### Availability is the policy decision
 
@@ -258,9 +266,11 @@ status code, or poll `sender:diagnose`.
 ### The inspector reports only what it measures
 
 Checks that need an external dependency the platform does not require — DNS
-resolution, outbound SMTP reachability — are absent, because claiming a
-capability that has never been tested is worse than reporting nothing. They are
-added by the stages that depend on them.
+resolution — are absent from the inspector, because claiming a capability that
+has never been tested is worse than reporting nothing. Outbound SMTP is now
+tested, but deliberately **not** from the inspector: it requires network I/O and
+an operator-chosen destination, so it lives in the explicit `sender:verify-smtp`
+command instead. See "SMTP is verified, never inferred".
 
 `HostEnvironment` exists so runtime readings are injectable. The CLI SAPI and
 the web SAPI report different `max_execution_time` values, and a test cannot
@@ -274,22 +284,102 @@ honest signal is that the scheduled command actually ran, so:
 
 | Observed state | Capability |
 | --- | --- |
-| never | `UNKNOWN` |
-| recent | `READY` |
-| stale | `DEGRADED` |
+| no run recorded | `UNKNOWN` |
+| recent **successful** run | `READY` |
+| run recorded but stale | `DEGRADED` |
+| most recent run failed | `UNKNOWN` — liveness is not proven |
 | not observed | never `UNAVAILABLE` — there is no positive evidence to justify it |
 
-`sender:heartbeat` records the observation. Stage 1 required no Cron at all;
-Stage 2 observes it; Stage 3 is the first stage that uses it for work.
+Health is deliberately **not** re-derived from process privileges. Root has an
+`unlimited` `max_execution_time` whether or not cron is installed, so that
+signal cannot distinguish a working host from a broken one.
 
-The heartbeat is stored in the **cache**, not in `system_settings`, and the
-difference is deliberate in both directions. A cache-cleared kill switch that
-silently re-enables a subsystem is worse than no kill switch, so operator flags
-are persisted. Conversely, a heartbeat that cannot be forgotten would let a
-stale observation outlive the cron entry that produced it, so it is held in the
-cache where `php artisan cache:clear` resets cron to `UNKNOWN`. Losing the
-observation fails in the safe direction: the platform reports "not established"
-instead of falsely claiming automation is running.
+Stage 1 required no cron at all; Stage 2 observed it; Stage 3A made the
+observation durable.
+
+### Runs are recorded, not inferred from a timestamp
+
+Each run appends a `scheduled_runs` row with its command, start, finish, status
+and outcome. Recording the *outcome* rather than merely that "something ran" is
+what makes a broken cron diagnosable: a command that is still being invoked but
+keeps failing is distinguishable from one that has stopped being invoked. Those
+have opposite remedies, and a heartbeat could only ever answer for the second.
+
+A run left in `running` means the process was killed before it closed its own
+record. Nothing force-closes it, because that is a signal rather than a gap.
+
+This was previously cache-backed on the argument that `cache:clear` is a useful
+operator reset. That argument turned out to be wrong in practice: an operator
+running `cache:clear` while diagnosing a broken deployment got `UNKNOWN` — the
+same answer as a host that had never been configured — with nothing pointing at
+the cause. Operator flags stay in `system_settings` for the opposite reason: a
+cache-cleared kill switch that silently re-enables a subsystem is worse than no
+kill switch. **Erasing transient state is safe; erasing the evidence that
+something was broken is not.**
+
+### SMTP is verified, never inferred
+
+SMTP is the clearest case of a capability that configuration cannot establish.
+`MAIL_HOST`, `MAIL_USERNAME` and `MAIL_PASSWORD` being set proves only that
+somebody typed them. So the platform does not derive `smtp` from configuration
+at all. `SmtpCapability` reports a recorded `sender:verify-smtp` result, and is
+`UNKNOWN` until one exists.
+
+Verification is staged, and each stage is reported separately, because the
+stages fail for different reasons and an operator needs to know which:
+
+| Stage | Establishes |
+| --- | --- |
+| `configuration` | a mailer that actually delivers is configured |
+| `transport` | Laravel can build that transport from the configuration |
+| `connection` | host resolves, TCP connects, TLS negotiates where required |
+| `acceptance` | the server accepted a message from these credentials |
+
+Verification stops at the first failing stage. Omitting `--to` proves the
+connection only and reports `DEGRADED`, because the credentials were never
+exercised — reporting `READY` there would overstate what was established.
+
+**The strongest available claim is server acceptance, not delivery.** Nothing
+inside the application can observe a recipient's mailbox. That boundary is
+stated in the command output, in the diagnostic detail, and in the persisted
+payload itself (`proves` / `does_not_prove`), because "SMTP available" is
+otherwise read as "mail arrives". An early version of the command printed its
+reassurance unconditionally, including after a failed verification — the exact
+failure mode this design exists to prevent.
+
+Two properties follow from running it as a command rather than inline:
+
+- **No request pays for network I/O.** The capability reads stored evidence, so
+  a page view never opens a mail connection.
+- **It does not expire silently.** An old verification degrades rather than
+  being trusted forever, since configuration can change after it was taken.
+
+Persisted failure text goes through `SensitiveData::redactText`. A run record
+and a verification record outlive the deployment that wrote them, and error text
+routinely quotes the configuration that caused the failure, including a
+password.
+
+### Queue reservation is an invariant, not a default
+
+A queue job stays reserved for `retry_after` seconds before it becomes visible
+again. If that is shorter than the time a worker may legitimately take, a slow
+but healthy job is handed to a second worker and processed twice. The failure is
+silent and produces duplicate sends — the worst possible failure for this
+platform.
+
+The invariant is therefore explicit:
+
+```
+retry_after >= max_worker_runtime_seconds + reservation_margin_seconds
+```
+
+Shipped defaults give `300 >= 240 + 60`. The check runs only for the `database`
+driver, the one driver whose configuration the platform can reason about, and a
+violation reports `queue` as `UNAVAILABLE` with remediation.
+
+This is why a supported driver is not automatically `READY`: capability and
+configuration are separate concerns, and `queue` can be unavailable because the
+driver is unsupported *or* because a supported one is configured unsafely.
 
 ### Operator control is one flag, persisted
 

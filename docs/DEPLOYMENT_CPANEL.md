@@ -117,6 +117,34 @@ MAIL_FROM_ADDRESS="noreply@example.com"
 MAIL_FROM_NAME="${APP_NAME}"
 ```
 
+Setting these does not establish that mail works. A host, a port and a password
+can all be present and still be wrong — a blocked port, an expired password, a
+provider that rejects the sender address. The platform therefore does not derive
+the `smtp` capability from configuration at all; it stays `UNKNOWN` until you
+verify it:
+
+```bash
+php artisan sender:verify-smtp --to=you@example.com
+```
+
+This prints one line per stage — `configuration`, `transport`, `connection`,
+`acceptance` — and exits non-zero if any of them fails, so it is safe to run
+from a deployment script.
+
+Read the result precisely:
+
+- `acceptance ok` means **the server accepted a message from these
+  credentials**. It does **not** mean the message was delivered to a mailbox.
+  Nothing inside the application can observe that, and the command says so.
+- Omitting `--to` proves only the connection and reports `DEGRADED`, because
+  the credentials were never exercised.
+- The result is recorded and shown by `sender:diagnose`, `/health` and
+  `/diagnostics`. Re-run it after changing any mail setting; an old
+  verification degrades rather than being trusted indefinitely.
+
+If you are unsure whether a message arrived, send to an address you control and
+check it directly.
+
 Rules that matter in production:
 
 - `APP_DEBUG=false`. Debug output leaks stack traces and environment values.
@@ -187,8 +215,10 @@ disabled on a production account if the extra visibility is unwanted.
 
 ## 7. Cron
 
-**Stage 1 required no cron at all.** Stage 2 only *observes* it, and Stage 3 is
-the first stage that uses it to do work.
+**Stage 1 required no cron at all.** Stage 2 only *observed* it. Stage 3A made
+the observation durable and recorded outcomes, but still no background work
+exists, so this entry proves nothing yet except that the platform can be
+observed.
 
 cPanel offers no way for PHP to ask whether a cron entry is configured, so the
 platform cannot detect cron. It can only record that the scheduled command
@@ -205,8 +235,23 @@ cPanel -> MultiPHP Manager. Set the frequency to five minutes, and expect:
 | Observed | Reported |
 | --- | --- |
 | never run | `UNKNOWN` |
-| last run within `SENDER_CRON_STALE_AFTER_SECONDS` (default 900) | `READY` |
-| older than that | `DEGRADED` |
+| last run succeeded within `SENDER_CRON_STALE_AFTER_SECONDS` (default 900) | `READY` |
+| last run succeeded but older than that | `DEGRADED` |
+| last run **failed** | `UNKNOWN` — liveness is not proven |
+
+That last row is why the outcome is recorded. A cron entry that is still being
+invoked but keeps failing is a different problem from an entry that has stopped
+being invoked, and they have opposite remedies. A heartbeat could only ever
+answer the second question.
+
+Each run appends a row to `scheduled_runs` recording the command, its duration
+and a redacted failure message, so you can inspect the history directly in the
+database:
+
+```sql
+SELECT command, status, started_at, duration_ms, error
+FROM scheduled_runs ORDER BY started_at DESC LIMIT 10;
+```
 
 Cron is never reported `UNAVAILABLE`. There is no positive evidence available
 from inside PHP that would justify it, and inferring one would be a guess.
@@ -214,9 +259,46 @@ from inside PHP that would justify it, and inferring one would be a guess.
 `UNKNOWN` does not fail `sender:diagnose` while cron is not required. Nothing
 depends on it yet, so it is reported rather than treated as a fault.
 
+Run evidence lives in the database, not the cache, so
+`php artisan cache:clear` does **not** erase it. Do not use `cache:clear` to
+"reset" cron — it will not, and previously it left an operator with an
+unexplained `UNKNOWN` while diagnosing the very problem it appeared to clear.
+
 Do not add cron entries for background work yet — no such work exists, and an
 entry that calls a command which does not do anything only produces confusing
 log noise.
+
+---
+
+## 7a. Queue reservation
+
+A queued job is reserved for `retry_after` seconds before it becomes visible to
+another worker. If that is shorter than the time a worker may legitimately take,
+a slow but healthy job is picked up a second time and processed twice.
+
+For this platform that failure is worse than an error: it means duplicate
+emails, with no exception and nothing in the log.
+
+The deployment therefore has to satisfy:
+
+```
+retry_after >= SENDER_DEPLOYMENT_LIMIT_MAX_WORKER_RUNTIME_SECONDS + SENDER_QUEUE_RESERVATION_MARGIN_SECONDS
+```
+
+The shipped defaults give `300 >= 240 + 60`, which satisfies it with margin.
+`php artisan sender:diagnose` reports `queue` as `UNAVAILABLE` with the exact
+numbers when it does not hold, and applies this check only to the `database`
+driver.
+
+If you raise the worker runtime, raise `retry_after` with it:
+
+```
+QUEUE_RETRY_AFTER=600
+SENDER_DEPLOYMENT_LIMIT_MAX_WORKER_RUNTIME_SECONDS=240
+```
+
+Raising the worker runtime without raising `retry_after` is the specific
+mistake this invariant exists to catch.
 
 ---
 
@@ -234,6 +316,10 @@ php artisan view:cache
 If `public/build` changes in a release, it is committed, so no Node build is
 required on the server.
 
+`migrate` creates the `scheduled_runs` table added in Stage 3A. Run it before
+`config:cache`; an older cached config on a newer schema is harder to diagnose
+than a missing cache.
+
 ---
 
 ## Troubleshooting
@@ -242,9 +328,14 @@ required on the server.
 | --- | --- | --- |
 | `/health` returns 503 | A capability was measured as unavailable | `php artisan sender:diagnose` names it |
 | `sender:diagnose` exits 0 but prints `DEGRADED` | Correct: the host works with less headroom | Raise the PHP setting it names, or accept it |
-| A capability shows `UNKNOWN` | Nothing has measured it yet | Expected for `url_fetch` and `smtp` at this stage |
-| Cron shows `UNKNOWN` | No heartbeat has been observed | Add the `sender:heartbeat` cron entry |
-| Cron shows `DEGRADED` | The entry is running but stopped, or is failing | Check the cron log in cPanel |
+| A capability shows `UNKNOWN` | Nothing has measured it yet | Expected for `url_fetch`; `smtp` needs `sender:verify-smtp` |
+| `smtp` shows `UNAVAILABLE` | Verification found a real problem | `sender:verify-smtp --to=...` names the failing stage |
+| `smtp` shows `UNKNOWN` | Never verified | Run `php artisan sender:verify-smtp --to=you@example.com` |
+| Password reset reports success but no mail arrives | `MAIL_MAILER` is `log`/`array`, or the relay is wrong | Verify SMTP; `log` discards messages silently |
+| Queue shows `UNAVAILABLE` on the `database` driver | Reservation invariant violated | See section 7a; raise `retry_after` or lower the worker runtime |
+| Cron shows `UNKNOWN` | No run has been recorded, or the last run failed | Add the `sender:heartbeat` cron entry; check `scheduled_runs.error` |
+| Cron shows `DEGRADED` | Runs succeeded but the last one is stale | Check the cron log in cPanel |
+| `cache:clear` did not reset cron | Correct: run evidence is durable | Expected; evidence lives in `scheduled_runs`, not the cache |
 | 500 on every page | `APP_KEY` missing, or `storage/` not writable | `php artisan key:generate`, `chmod 775 storage` |
 | Login loop | Sessions cannot persist | Confirm `sessions` table exists and the `database` session driver is set |
 | Styles missing | `public/build` missing or stale | Confirm `public/build/manifest.json` exists |

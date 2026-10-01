@@ -54,10 +54,16 @@ written for a piece of behaviour, that is a signal about the design.
 
 ```bash
 php artisan sender:diagnose
+php artisan sender:heartbeat
 php artisan serve
 ```
 
 Exercise the changed surface in a browser, not only through tests.
+
+When the change touches SMTP, run `php artisan sender:verify-smtp --to=<a real
+address you control>` rather than trusting that `.env` looks right. It proves
+what it can prove — the server accepted a message — and no test can substitute
+for checking whether the mail actually arrived.
 
 ### 5. Document
 
@@ -113,7 +119,7 @@ there. Do not repeat the original roadmap; the roadmap changes as the code does.
 0. Foundation / architecture                    completed
 1. Laravel application foundation                completed
 2. Capability / availability / deployment control completed
-3. Job + cron processing engine                 pending
+3. Job + cron processing engine                 3A done; engine pending
 4. Email extraction engine                      pending
 5. SMTP campaign engine                         pending
 6. Admin operations centre                      pending

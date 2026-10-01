@@ -7,20 +7,23 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
-> **Stage 2 — COMPLETE / VERIFIED**
-> Capability, availability, deployment-control, subsystem flags, entitlement
-> seam, and cron observation foundation established. No feature-level
-> entitlement consumer or background job engine has been implemented.
+> **Stage 3A — COMPLETE / VERIFIED**
+> Queue reservation safety, durable scheduled-run evidence, and real SMTP
+> capability verification established. No job engine, extractor, or campaign
+> sending has been implemented.
 
-**Stage 2 complete. Stage 3 not started.**
+**Stage 3A complete. The Stage 3 job engine itself has not started.**
 
-Accepted baseline: `84f46eb`. 99 tests / 380 assertions passing.
+Accepted baseline: `84f46eb`. 136 tests / 483 assertions passing.
 
-The four known limitations recorded in `README.md` (a `DEGRADED` developer
-machine, an empty `SENDER_REQUIRED_CAPABILITIES`, no production entitlement
-consumer, and a cache-backed heartbeat) are accepted consequences of the Stage 2
-scope. They are not defects, and Stage 3 must not be scoped to eliminate them —
-in particular, Stage 3 must not depend on making a local host `READY`.
+The known limitations recorded in `README.md` (a `DEGRADED` developer machine, an
+empty `SENDER_REQUIRED_CAPABILITIES`, no production entitlement consumer, and an
+unverified `smtp` capability) are accepted consequences of the current scope.
+They are not defects, and Stage 3 must not be scoped to eliminate them — in
+particular, Stage 3 must not depend on making a local host `READY`.
+
+The Stage 2 limitation that the cron heartbeat was cache-backed is now resolved;
+see "Stage 3A delivered" below.
 
 ## Stages
 
@@ -29,7 +32,7 @@ in particular, Stage 3 must not depend on making a local host `READY`.
 | 0 | Foundation / architecture | complete |
 | 1 | Laravel application foundation | complete |
 | 2 | Capability, availability and deployment control foundation | complete |
-| 3 | Job and cron processing engine | pending |
+| 3 | Job and cron processing engine | 3A complete; engine not started |
 | 4 | Email extraction engine | pending |
 | 5 | SMTP campaign engine | pending |
 | 6 | Admin operations centre | pending |
@@ -82,7 +85,8 @@ limits and administration around code that already existed.
 - `DeploymentLimit` and `SENDER_DEPLOYMENT_LIMIT_*`, kept distinct from the
   host `requirements`
 - Cron observation via `sender:heartbeat`, with `UNKNOWN` → `READY` → `DEGRADED`
-  and no `UNAVAILABLE` that evidence cannot support
+  and no `UNAVAILABLE` that evidence cannot support. **Superseded by Stage 3A:**
+  the evidence is now durable and records outcomes, not just occurrences.
 - `sender:diagnose` exit semantics that treat severity and exit status as
   different things
 - Runtime logging coverage: every channel is constructed, and the file-backed
@@ -135,7 +139,28 @@ Recorded now so they are decided deliberately rather than by accident:
   `StreamHandler` that honours neither `processors` nor `taps`, so it is the one
   logging path without redaction. It needs a custom handler or a decision to
   accept the exposure; it is not a Stage 2 fix.
-- **Cron heartbeat durability.** The heartbeat is cache-backed, so
-  `php artisan cache:clear` resets cron to `UNKNOWN` until the next run. That is
-  the safe direction to fail and is intended. Whether Stage 3's job engine needs
-  a durable last-run record is a Stage 3 decision.
+- **Cron heartbeat durability.** Resolved in Stage 3A. Run evidence is durable in
+  `scheduled_runs` and `cache:clear` no longer erases it, and runs record an
+  outcome rather than only that something ran, so a failing cron is now
+  distinguishable from an absent one.
+
+---
+
+## What Stage 3A delivered
+
+Stage 3 is the job and cron processing engine. Stage 3A was scoped to the three
+infrastructure defects that would have made that engine unsafe to build on top
+of, before committing to a workload:
+
+- **Queue reservation invariant** (`7b8cc10`). `retry_after` defaulted to 90s
+  against a 240s worker runtime, so a slow but healthy job would be handed to a
+  second worker and processed twice — a silent duplicate-send bug. The invariant
+  is now explicit and enforced for the `database` driver.
+- **Durable scheduled-run evidence** (`19f5a77`). Replaced the cache-backed
+  heartbeat with `scheduled_runs`. Resolves the open question below.
+- **SMTP verification** (`891eb81`). `sender:verify-smtp` establishes the
+  capability explicitly, staged, and records what it did and did not prove.
+
+No job engine, workload, extractor or campaign sending was built. The next
+decision is which real workload the engine should run first; that choice should
+be made against a re-audit, not against this document.
