@@ -169,6 +169,54 @@ measured.
 is empty. An `UNKNOWN` capability nothing depends on is reported but does not
 fail the installation; an `UNKNOWN` capability that is required does.
 
+### The five capability subjects
+
+| Subject | Established by | State today |
+| --- | --- | --- |
+| `cron` | an observed `sender:heartbeat` | `UNKNOWN` until cron runs |
+| `storage` | writable paths and free disk | `READY` on a healthy host |
+| `queue` | the queue driver and its table | `READY` on the `database` driver |
+| `url_fetch` | code that performs a fetch | `UNKNOWN` — no such code yet |
+| `smtp` | code that performs a delivery | `UNKNOWN` — no such code yet |
+
+The split is deliberate. `storage` and `queue` are `READY` because the existing
+checks *are* their prerequisites — a writable directory is what file storage
+requires. `url_fetch` and `smtp` are `UNKNOWN` because no extension check can
+establish that a fetch or a delivery would actually succeed.
+
+### Availability is the policy decision
+
+`AvailabilityResolver` answers "may this operation proceed right now?" by
+composing the three independent inputs in a fixed order:
+
+```
+infrastructure capability  ->  operator flag  ->  entitlement
+```
+
+It returns one of three states:
+
+| State | Meaning |
+| --- | --- |
+| `AVAILABLE` | verified capable, enabled and entitled |
+| `UNVERIFIED` | not blocked, but a dependency has not been established |
+| `BLOCKED` | something positively prevents the operation |
+
+and, when blocked, one machine-readable reason:
+
+| Reason | Blocked because |
+| --- | --- |
+| `CAPABILITY_UNAVAILABLE` | this installation cannot perform it |
+| `SUBSYSTEM_DISABLED` | the operator switched the subsystem off |
+| `NOT_ENTITLED` | the account is not granted the feature |
+
+Order matters. An operator stop outranks an entitlement shortfall, so an
+operator disablement always yields `SUBSYSTEM_DISABLED` — a deterministic,
+operationally meaningful reason rather than a commercial one.
+
+`UNVERIFIED` is the case that keeps the layers honest: an unmeasured dependency
+is reported without being converted into a refusal, because only the consuming
+requirement may decide that.
+
 ### Diagnostic severity is not process exit status
 
 | Overall status | `sender:diagnose` exit |
@@ -182,6 +230,30 @@ A degraded host is operational: it works with less headroom, and the
 deployment limits exist precisely so it stays inside that headroom. Failing the
 command for `DEGRADED` would train operators to ignore it, and would make the
 check useless on the small shared plans this platform targets.
+
+### `/health` and `sender:diagnose` deliberately answer different questions
+
+This asymmetry is intentional and must not be "fixed" by making the two agree.
+
+| Condition | `/health` | `sender:diagnose` |
+| --- | --- | --- |
+| `DEGRADED` | 200 `degraded` | exit 0, warnings printed |
+| `UNAVAILABLE` | 503 `unavailable` | exit non-zero |
+| required, `UNKNOWN` | 200 `unknown` | exit non-zero |
+| optional, `UNKNOWN` | 200 `unknown` | exit 0 |
+
+`/health` answers "is this process still serving?", for a monitoring service
+that will restart or page when it sees a failure. A required-but-unestablished
+capability does not stop the process serving, so it returns 200.
+
+`sender:diagnose` answers "should an operator act?", for a person deciding
+whether to change configuration. In that context an unestablished requirement is
+exactly the thing worth failing on.
+
+So `UNKNOWN` on a required capability is the one state where the surfaces
+disagree: HTTP 200 alongside exit 1. That is the design. Monitoring that needs
+to alert on it should read the `capability` field in the body rather than the
+status code, or poll `sender:diagnose`.
 
 ### The inspector reports only what it measures
 
@@ -210,15 +282,36 @@ honest signal is that the scheduled command actually ran, so:
 `sender:heartbeat` records the observation. Stage 1 required no Cron at all;
 Stage 2 observes it; Stage 3 is the first stage that uses it for work.
 
+The heartbeat is stored in the **cache**, not in `system_settings`, and the
+difference is deliberate in both directions. A cache-cleared kill switch that
+silently re-enables a subsystem is worse than no kill switch, so operator flags
+are persisted. Conversely, a heartbeat that cannot be forgotten would let a
+stale observation outlive the cron entry that produced it, so it is held in the
+cache where `php artisan cache:clear` resets cron to `UNKNOWN`. Losing the
+observation fails in the safe direction: the platform reports "not established"
+instead of falsely claiming automation is running.
+
 ### Operator control is one flag, persisted
 
 `SubsystemFlagRegistry` is the single mechanism for safe mode, emergency
 disablement and subsystem toggles. They differ only in intent, and splitting
 them would mean three places to check before allowing an operation.
 
+The three registered subsystems are `cron`, `url_fetch` and `smtp`, matching
+the defaults in `sender.subsystems`. A flag exists only for a subsystem that
+exists today; none are added speculatively. Each maps to the capability it
+depends on, which is why `storage` is not a subsystem: it is measured as a
+capability but is not operator-switchable.
+
 Flags are stored in `system_settings`, not the cache, because a cache-cleared
 kill switch that silently re-enables a subsystem is worse than no kill switch
 at all.
+
+**There is no operator surface yet.** `enable()`, `disable()` and `reset()` are
+reachable only from tests, and `system.manage` is used by no route or command.
+The mechanism is in place; the control panel that exposes it is deferred to the
+admin operations centre, or to Stage 3 if the job engine needs an emergency
+stop sooner.
 
 ### Entitlement fails closed
 
@@ -253,6 +346,18 @@ Note: the `single` and `daily` built-in Laravel log drivers ignore the
 `processors` key, so the file channels are configured through the `monolog`
 driver instead. Leaving them on the built-in drivers would have produced a
 configuration that looks correct and redacts nothing.
+
+The invariant is that every configured channel redacts, and a test asserts it
+by resolving each channel and checking its processor or tap. Drivers that ignore
+`processors` — `slack`, `syslog`, `errorlog` — use a tap instead.
+
+**One known gap: the `emergency` channel does not redact.** Laravel's
+`createEmergencyLogger()` builds a bare `StreamHandler` from the `path` key and
+applies neither processors nor taps, so it cannot be covered by configuration.
+It only fires when the application has already failed to log anything else, but
+a fatal error message can still carry a value. The test excludes it explicitly
+rather than pretending the invariant holds. Closing it requires either a custom
+emergency handler or accepting the exposure; it is not a Stage 2 fix.
 
 ## 10. Error handling
 

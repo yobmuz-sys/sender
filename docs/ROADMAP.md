@@ -125,3 +125,17 @@ Recorded now so they are decided deliberately rather than by accident:
 - **Upgrade path.** Laravel 12 reaches the end of security fixes in February
   2027. The Laravel 13 migration is a version bump, but it should be scheduled
   rather than absorbed into a feature stage.
+- **Operator surface for subsystem flags.** `SubsystemFlagRegistry` has
+  `enable()`, `disable()` and `reset()`, but nothing exposes them to an
+  operator, and `system.manage` gates no route or command. Decide whether that
+  arrives in Stage 3 — the job engine is the first subsystem worth stopping in
+  an emergency — or is deferred to the admin operations centre, where it belongs
+  alongside the other operator controls.
+- **Emergency logger redaction.** Laravel's `emergency` channel builds a bare
+  `StreamHandler` that honours neither `processors` nor `taps`, so it is the one
+  logging path without redaction. It needs a custom handler or a decision to
+  accept the exposure; it is not a Stage 2 fix.
+- **Cron heartbeat durability.** The heartbeat is cache-backed, so
+  `php artisan cache:clear` resets cron to `UNKNOWN` until the next run. That is
+  the safe direction to fail and is intended. Whether Stage 3's job engine needs
+  a durable last-run record is a Stage 3 decision.

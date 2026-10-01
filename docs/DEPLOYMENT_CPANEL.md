@@ -146,6 +146,25 @@ php artisan sender:diagnose
 The result must not be `Unavailable`. In a browser, `/health` must return
 `{"status":"ok","capability":"READY"}`.
 
+`/health` reports the aggregate verdict and nothing else — no paths, versions or
+dependency detail — so it is safe to point at a monitoring service. Its full
+response set:
+
+| Condition | HTTP | Body |
+| --- | --- | --- |
+| `READY` | 200 | `{"status":"ok","capability":"READY"}` |
+| `DEGRADED` | 200 | `{"status":"degraded","capability":"DEGRADED"}` |
+| `UNKNOWN`, nothing required | 200 | `{"status":"unknown","capability":"UNKNOWN"}` |
+| `UNKNOWN`, subject in `SENDER_REQUIRED_CAPABILITIES` | 200 | `{"status":"unknown","capability":"UNKNOWN"}` |
+| `UNAVAILABLE` | 503 | `{"status":"unavailable","capability":"UNAVAILABLE"}` |
+
+Note the fourth row: `/health` returns **200** even when a required capability
+cannot be established, while `sender:diagnose` exits non-zero for the same
+condition. That asymmetry is deliberate — 200 means "still serving", which is
+what a probe should restart on. Monitoring that needs to alert on an
+unestablished requirement should read the `capability` field rather than the
+status code. `docs/ARCHITECTURE.md` section 7 records the reasoning.
+
 Then create the first administrator: register through the interface, and run
 
 ```bash

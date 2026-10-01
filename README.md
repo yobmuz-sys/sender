@@ -183,8 +183,9 @@ npm run build   # production build, committed to public/build
 | `/` | public | Landing page |
 | `/health` | public | JSON readiness verdict, no host detail |
 | `/up` | public | Laravel liveness probe |
-| `/register`, `/login`, `/forgot-password` | guest | Authentication |
+| `/register`, `/login`, `/forgot-password`, `/reset-password` | guest | Authentication |
 | `/dashboard` | authenticated | Account overview |
+| `/logout` | authenticated | End the session (POST) |
 | `/diagnostics` | `system.view` | Full host capability report |
 
 `/diagnostics` additionally requires `SENDER_DIAGNOSTICS_ENABLED=true` in
