@@ -48,6 +48,21 @@ class LoginRequest extends FormRequest
             ]);
         }
 
+        $user = Auth::user();
+
+        // Suspension is checked after the credential check so the response is
+        // the generic failure in both cases: a distinct message would tell an
+        // attacker which addresses exist and are suspended.
+        if ($user !== null && ! $user->canSignIn()) {
+            Auth::guard('web')->logout();
+
+            RateLimiter::hit($this->throttleKey());
+
+            throw ValidationException::withMessages([
+                'email' => __('auth.failed'),
+            ]);
+        }
+
         RateLimiter::clear($this->throttleKey());
     }
 

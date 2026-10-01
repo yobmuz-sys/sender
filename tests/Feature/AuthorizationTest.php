@@ -87,8 +87,10 @@ class AuthorizationTest extends TestCase
             ->get('/diagnostics')
             ->assertForbidden();
 
+        // The legacy entry point now redirects into the administration area
+        // rather than rendering a second copy of the report.
         $this->actingAs(User::factory()->role(Role::Support)->create())
             ->get('/diagnostics')
-            ->assertOk();
+            ->assertRedirect(route('admin.system.diagnostics'));
     }
 }
