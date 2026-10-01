@@ -7,7 +7,20 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
+> **Stage 2 — COMPLETE / VERIFIED**
+> Capability, availability, deployment-control, subsystem flags, entitlement
+> seam, and cron observation foundation established. No feature-level
+> entitlement consumer or background job engine has been implemented.
+
 **Stage 2 complete. Stage 3 not started.**
+
+Accepted baseline: `84f46eb`. 99 tests / 380 assertions passing.
+
+The four known limitations recorded in `README.md` (a `DEGRADED` developer
+machine, an empty `SENDER_REQUIRED_CAPABILITIES`, no production entitlement
+consumer, and a cache-backed heartbeat) are accepted consequences of the Stage 2
+scope. They are not defects, and Stage 3 must not be scoped to eliminate them —
+in particular, Stage 3 must not depend on making a local host `READY`.
 
 ## Stages
 

@@ -11,8 +11,12 @@ long-running daemons and root access are **not** required at any point.
 
 ## Current status
 
-This repository is at **Stage 2 — capability, availability and deployment control
-foundation**.
+> **Stage 2 — COMPLETE / VERIFIED**
+> Capability, availability, deployment-control, subsystem flags, entitlement
+> seam, and cron observation foundation established. No feature-level
+> entitlement consumer or background job engine has been implemented.
+
+Accepted baseline: `84f46eb`. 99 tests / 380 assertions passing.
 
 Implemented and tested:
 
@@ -33,6 +37,26 @@ Implemented and tested:
 | Deny-by-default entitlement seam | done |
 | Operator subsystem kill switches | done |
 | Cron observation via `sender:heartbeat` | done |
+
+### Known intentional limitations
+
+These are accepted consequences of the Stage 2 scope, not defects. None of them
+should be "fixed" by weakening a threshold or a check.
+
+1. **`DEGRADED` on the developer machine.** Laragon's stock `php.ini` is below
+   the platform's 256M / 10M requirements. This is exactly what the inspector
+   exists to report. `sender:diagnose` correctly exits `0`: the repository's
+   gate must remain valid on an ordinary cPanel account, so the local
+   configuration is not raised to manufacture a green run.
+2. **`SENDER_REQUIRED_CAPABILITIES` is empty.** Nothing depends on a capability
+   yet, so no unestablished capability is a fault. The `UNKNOWN` → non-zero
+   exit path is covered by test only.
+3. **No production feature consumes `Entitlement`.** The interface exists and is
+   deny-by-default; no feature resolves a plan through it yet.
+4. **The cron heartbeat is cache-backed.** `php artisan cache:clear` resets cron
+   to `UNKNOWN` until the next run. That is the safe direction to fail: the
+   platform reports "not established" instead of falsely claiming automation is
+   running.
 
 **Not** implemented, and deliberately so at this stage: the email extractor,
 the web crawler, SMTP campaign sending, recipients, suppression, plans,
