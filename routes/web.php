@@ -2,16 +2,57 @@
 
 declare(strict_types=1);
 
-namespace App\Http\Controllers;
-
 use App\Domain\Users\Permission;
+use App\Http\Controllers\AccountController;
+use App\Http\Controllers\Admin\ApiController;
+use App\Http\Controllers\Admin\AuditController;
+use App\Http\Controllers\Admin\BillingController;
+use App\Http\Controllers\Admin\CampaignsController;
+use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
+use App\Http\Controllers\Admin\DiagnosticsController as AdminDiagnosticsController;
+use App\Http\Controllers\Admin\FeaturesController;
+use App\Http\Controllers\Admin\JobController;
+use App\Http\Controllers\Admin\PlansController;
+use App\Http\Controllers\Admin\RoleController;
+use App\Http\Controllers\Admin\RunController;
+use App\Http\Controllers\Admin\SettingsController;
+use App\Http\Controllers\Admin\SmtpController;
+use App\Http\Controllers\Admin\SubsystemController;
+use App\Http\Controllers\Admin\SystemController;
+use App\Http\Controllers\Admin\UserController;
+use App\Http\Controllers\Admin\UserStatusController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
+use App\Http\Controllers\Auth\EmailVerificationNotificationController;
+use App\Http\Controllers\Auth\EmailVerificationPromptController;
 use App\Http\Controllers\Auth\NewPasswordController;
 use App\Http\Controllers\Auth\PasswordResetLinkController;
 use App\Http\Controllers\Auth\RegisteredUserController;
+use App\Http\Controllers\Auth\VerifyEmailController;
+use App\Http\Controllers\DiagnosticsController;
+use App\Http\Controllers\PendingFeatureController;
 use Illuminate\Support\Facades\Route;
 
+/*
+|--------------------------------------------------------------------------
+| Public
+|--------------------------------------------------------------------------
+|
+| `/health` is deliberately public and deliberately minimal: it exposes the
+| aggregate verdict and nothing that helps someone fingerprint the host, so it
+| is safe to point a monitoring service at. Laravel's own `/up` answers before
+| any application code runs and is not declared here.
+|
+*/
+
 Route::view('/', 'welcome')->name('home');
+
+Route::get('health', [DiagnosticsController::class, 'health'])->name('health');
+
+/*
+|--------------------------------------------------------------------------
+| Guest
+|--------------------------------------------------------------------------
+*/
 
 Route::middleware('guest')->group(function (): void {
     Route::get('register', [RegisteredUserController::class, 'create'])->name('register');
@@ -27,14 +68,160 @@ Route::middleware('guest')->group(function (): void {
     Route::post('reset-password', [NewPasswordController::class, 'store'])->name('password.store');
 });
 
+/*
+|--------------------------------------------------------------------------
+| Authenticated
+|--------------------------------------------------------------------------
+*/
+
 Route::middleware('auth')->group(function (): void {
+
+    // Email confirmation.
+    Route::get('email/verify', EmailVerificationPromptController::class)->name('verification.notice');
+    Route::get('email/verify/{id}/{hash}', VerifyEmailController::class)
+        ->middleware(['signed', 'throttle:6,1'])
+        ->name('verification.verify');
+    Route::post('email/verification-notification', EmailVerificationNotificationController::class)
+        ->middleware('throttle:6,1')
+        ->name('verification.send');
+
     Route::get('dashboard', static fn () => view('dashboard'))->name('dashboard');
 
     Route::post('logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 
-    Route::get('diagnostics', [DiagnosticsController::class, 'index'])
+    // Account. Always available to a signed-in account.
+    Route::get('account/profile', [AccountController::class, 'profile'])->name('account.profile');
+    Route::put('account/profile', [AccountController::class, 'updateProfile'])->name('account.profile.update');
+    Route::get('account/security', [AccountController::class, 'security'])->name('account.security');
+    Route::put('account/security', [AccountController::class, 'updatePassword'])->name('account.password.update');
+
+    /*
+    |----------------------------------------------------------------------
+    | Customer product surface
+    |----------------------------------------------------------------------
+    |
+    | Honest shells. They render a pending state rather than pretending the
+    | feature exists, so navigation can describe the whole product now without
+    | any page making a claim it cannot support.
+    |
+    */
+
+    Route::get('extractor', PendingFeatureController::class)
+        ->defaults('section', 'extractor')->name('extractor.index');
+    Route::get('extractor/new', PendingFeatureController::class)
+        ->defaults('section', 'extractor')->defaults('record', 'new')->name('extractor.create');
+    Route::get('extractor/history', PendingFeatureController::class)
+        ->defaults('section', 'extractor')->defaults('record', 'history')->name('extractor.history');
+    Route::get('extractor/{extraction}', PendingFeatureController::class)
+        ->defaults('section', 'extractor')->name('extractor.show');
+
+    Route::get('files', PendingFeatureController::class)
+        ->defaults('section', 'files')->name('files.index');
+    Route::get('files/new', PendingFeatureController::class)
+        ->defaults('section', 'files')->defaults('record', 'new')->name('files.create');
+    Route::get('files/{file}', PendingFeatureController::class)
+        ->defaults('section', 'files')->name('files.show');
+
+    Route::get('lists', PendingFeatureController::class)
+        ->defaults('section', 'lists')->name('lists.index');
+    Route::get('lists/new', PendingFeatureController::class)
+        ->defaults('section', 'lists')->defaults('record', 'new')->name('lists.create');
+    Route::get('lists/{list}', PendingFeatureController::class)
+        ->defaults('section', 'lists')->name('lists.show');
+
+    Route::get('templates', PendingFeatureController::class)
+        ->defaults('section', 'templates')->name('templates.index');
+    Route::get('templates/new', PendingFeatureController::class)
+        ->defaults('section', 'templates')->defaults('record', 'new')->name('templates.create');
+    Route::get('templates/{template}', PendingFeatureController::class)
+        ->defaults('section', 'templates')->name('templates.show');
+
+    Route::get('campaigns', PendingFeatureController::class)
+        ->defaults('section', 'campaigns')->name('campaigns.index');
+    Route::get('campaigns/new', PendingFeatureController::class)
+        ->defaults('section', 'campaigns')->defaults('record', 'new')->name('campaigns.create');
+    Route::get('campaigns/{campaign}', PendingFeatureController::class)
+        ->defaults('section', 'campaigns')->name('campaigns.show');
+    Route::get('campaigns/{campaign}/edit', PendingFeatureController::class)
+        ->defaults('section', 'campaigns')->defaults('record', 'edit')->name('campaigns.edit');
+
+    Route::get('suppression', PendingFeatureController::class)
+        ->defaults('section', 'suppression')->name('suppression.index');
+    Route::get('analytics', PendingFeatureController::class)
+        ->defaults('section', 'analytics')->name('analytics.index');
+
+    /*
+    |----------------------------------------------------------------------
+    | Legacy diagnostics entry point
+    |----------------------------------------------------------------------
+    |
+    | Kept for anyone already using the bookmark, and redirected rather than
+    | duplicated: two pages rendering the same host detail would be two places
+    | to keep in step.
+    |
+    */
+
+    Route::get('diagnostics', static fn () => redirect()->route('admin.system.diagnostics'))
         ->middleware('can:'.Permission::SYSTEM_VIEW)
         ->name('diagnostics');
 });
 
-Route::get('health', [DiagnosticsController::class, 'health'])->name('health');
+/*
+|--------------------------------------------------------------------------
+| Administration
+|--------------------------------------------------------------------------
+|
+| Permissions are attached per route rather than by a separate admin middleware
+| or a role comparison. The Gate layer, registered from the Permission
+| catalogue, is the single source of truth, so a route states exactly the ability
+| it requires and nothing else decides access.
+|
+*/
+
+Route::middleware(['auth', 'confirmed'])
+    ->prefix('admin')
+    ->name('admin.')
+    ->group(function (): void {
+
+        Route::get('/', AdminDashboardController::class)->name('dashboard');
+
+        // Users.
+        Route::get('users', [UserController::class, 'index'])->middleware('can:'.Permission::USERS_VIEW)->name('users.index');
+        Route::get('users/create', [UserController::class, 'create'])->middleware('can:'.Permission::USERS_CREATE)->name('users.create');
+        Route::post('users', [UserController::class, 'store'])->middleware('can:'.Permission::USERS_CREATE)->name('users.store');
+        Route::get('users/{user}', [UserController::class, 'show'])->middleware('can:'.Permission::USERS_VIEW)->name('users.show');
+        Route::get('users/{user}/edit', [UserController::class, 'edit'])->middleware('can:'.Permission::USERS_EDIT)->name('users.edit');
+        Route::put('users/{user}', [UserController::class, 'update'])->middleware('can:'.Permission::USERS_EDIT)->name('users.update');
+        Route::post('users/{user}/suspend', [UserStatusController::class, 'store'])->middleware('can:'.Permission::USERS_SUSPEND)->name('users.suspend');
+        Route::delete('users/{user}/suspend', [UserStatusController::class, 'destroy'])->middleware('can:'.Permission::USERS_SUSPEND)->name('users.reinstate');
+
+        Route::get('roles', RoleController::class)->middleware('can:'.Permission::USERS_VIEW)->name('roles.index');
+
+        Route::get('features', FeaturesController::class)->middleware('can:'.Permission::FEATURES_VIEW)->name('features.index');
+        Route::get('plans', PlansController::class)->middleware('can:'.Permission::PLANS_VIEW)->name('plans.index');
+        Route::get('campaigns', CampaignsController::class)->middleware('can:'.Permission::CAMPAIGNS_VIEW)->name('campaigns.index');
+
+        Route::get('jobs', JobController::class)->middleware('can:'.Permission::JOBS_VIEW)->name('jobs.index');
+        Route::get('runs', RunController::class)->middleware('can:'.Permission::JOBS_VIEW)->name('runs.index');
+
+        Route::get('smtp', [SmtpController::class, 'index'])->middleware('can:'.Permission::SYSTEM_VIEW)->name('smtp.index');
+        Route::post('smtp/verify', [SmtpController::class, 'verify'])->middleware('can:'.Permission::SYSTEM_MANAGE)->name('smtp.verify');
+        Route::post('smtp/send', [SmtpController::class, 'sendTestMessage'])->middleware('can:'.Permission::SYSTEM_MANAGE)->name('smtp.send');
+        Route::delete('smtp/verification', [SmtpController::class, 'forget'])->middleware('can:'.Permission::SYSTEM_MANAGE)->name('smtp.forget');
+
+        Route::prefix('system')->group(function (): void {
+            Route::get('/', SystemController::class)->middleware('can:'.Permission::SYSTEM_VIEW)->name('system.index');
+            Route::get('diagnostics', AdminDiagnosticsController::class)->middleware('can:'.Permission::SYSTEM_VIEW)->name('system.diagnostics');
+
+            Route::get('subsystems', [SubsystemController::class, 'index'])->middleware('can:'.Permission::SYSTEM_VIEW)->name('system.subsystems');
+            Route::post('subsystems/{subsystem}/enable', [SubsystemController::class, 'enable'])->middleware('can:'.Permission::SYSTEM_MANAGE)->name('system.subsystems.enable');
+            Route::post('subsystems/{subsystem}/disable', [SubsystemController::class, 'disable'])->middleware('can:'.Permission::SYSTEM_MANAGE)->name('system.subsystems.disable');
+            Route::post('subsystems/{subsystem}/reset', [SubsystemController::class, 'reset'])->middleware('can:'.Permission::SYSTEM_MANAGE)->name('system.subsystems.reset');
+        });
+
+        Route::get('settings', [SettingsController::class, 'index'])->middleware('can:'.Permission::SYSTEM_VIEW)->name('settings.index');
+
+        Route::get('api', ApiController::class)->middleware('can:'.Permission::SYSTEM_VIEW)->name('api.index');
+        Route::get('billing', BillingController::class)->middleware('can:'.Permission::SYSTEM_VIEW)->name('billing.index');
+        Route::get('audit', AuditController::class)->middleware('can:'.Permission::SYSTEM_VIEW)->name('audit.index');
+    });

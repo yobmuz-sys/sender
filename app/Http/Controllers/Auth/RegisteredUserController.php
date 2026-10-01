@@ -18,8 +18,12 @@ class RegisteredUserController extends Controller
 
     public function store(RegisterRequest $request): RedirectResponse
     {
-        $request->createUser();
+        $user = $request->createUser();
 
-        return redirect()->route('dashboard');
+        // Land on the confirmation notice rather than the dashboard. Sending
+        // someone straight into the product after registering, with no signal
+        // that the address is unconfirmed, is how unverified accounts quietly
+        // accumulate.
+        return redirect()->route('verification.notice');
     }
 }

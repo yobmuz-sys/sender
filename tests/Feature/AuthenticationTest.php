@@ -39,7 +39,10 @@ class AuthenticationTest extends TestCase
             'password_confirmation' => 'correct-horse-battery',
         ]);
 
-        $response->assertRedirect('/dashboard');
+        // Landing on the confirmation notice rather than the dashboard: an
+        // account that nobody has been told is unverified is how unverified
+        // accounts quietly accumulate.
+        $response->assertRedirect(route('verification.notice'));
         $this->assertAuthenticated();
         $this->assertDatabaseHas('users', ['email' => 'ada@example.com']);
 
