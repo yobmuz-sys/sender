@@ -51,4 +51,27 @@ final class SensitiveData
     {
         return (bool) preg_match(self::SENSITIVE_KEY_PATTERN, $key);
     }
+
+    /**
+     * Redact credential-shaped substrings inside a free-text message.
+     *
+     * Key-based redaction is not sufficient for text. A failure message
+     * routinely quotes the configuration that caused it — "authentication
+     * rejected for ops with password=hunter2" — and a key named `error` or
+     * `message` gives the scanner nothing to match. Anything persisted beyond a
+     * log line must therefore be scrubbed on content as well as on key.
+     *
+     * Matches `key=value` and `key: value` where the key is credential-shaped,
+     * leaving surrounding prose intact so the message stays useful.
+     */
+    public static function redactText(string $text): string
+    {
+        // The replacement is a literal, not a pattern, so it is inserted
+        // verbatim; escaping it here would persist the backslashes.
+        return (string) preg_replace(
+            '/\b([A-Za-z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|authorization)[A-Za-z0-9_.-]*)(\s*[=:]\s*)("[^"]*"|\'[^\']*\'|[^\s,;)\]}]+)/i',
+            '$1$2'.self::REDACTED,
+            $text,
+        );
+    }
 }

@@ -14,7 +14,6 @@ use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\Enums\EntitlementStatus;
 use App\Domain\System\Enums\Subsystem;
 use App\Domain\System\Flags\SubsystemFlagRegistry;
-use App\Domain\System\Services\CronHeartbeat;
 use Tests\TestCase;
 
 /**
@@ -39,7 +38,7 @@ class AvailabilityTest extends TestCase
 
     public function test_an_unentitled_subsystem_is_blocked_for_entitlement_not_capability(): void
     {
-        app(CronHeartbeat::class)->record();
+        $this->recordRun();
 
         $availability = $this->resolve();
 
@@ -65,7 +64,7 @@ class AvailabilityTest extends TestCase
 
     public function test_an_entitled_and_measured_subsystem_is_available(): void
     {
-        app(CronHeartbeat::class)->record();
+        $this->recordRun();
         $this->app->instance(Entitlement::class, $this->entitledTo('cron'));
 
         $availability = $this->resolve();

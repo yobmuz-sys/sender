@@ -6,33 +6,47 @@ namespace App\Console\Commands;
 
 use App\Domain\System\Capabilities\CapabilityRegistry;
 use App\Domain\System\Enums\CapabilitySubject;
-use App\Domain\System\Services\CronHeartbeat;
+use App\Domain\System\Runs\RecordsScheduledRun;
+use App\Domain\System\Runs\RunRecorder;
 use Illuminate\Console\Command;
+use Throwable;
 
 /**
- * Records that the host's scheduler ran the platform.
+ * The command a cPanel Cron Job points at.
  *
- * cPanel offers no way to ask PHP "is cron configured?". The only honest
- * signal is that this command actually executed, so the cron capability stays
- * UNKNOWN until an operator points a Cron Job at it.
+ * cPanel cannot be detected from inside PHP: there is no API that answers "is a
+ * cron entry configured?". The only honest signal is that this command actually
+ * executed, so it exists to leave durable evidence of having run.
  *
- * Stage 2 observes cron only. Actual job processing arrives in Stage 3, and
- * this command will be the first thing that cron runs then.
+ * Its own outcome is recorded too. An earlier design wrote only a cache-backed
+ * timestamp, which could not distinguish "cron ran" from "cron ran and failed",
+ * and could be erased by `cache:clear`. The recorded run answers the question an
+ * operator actually has.
  */
 class HeartbeatCommand extends Command
 {
+    use RecordsScheduledRun;
+
     protected $signature = 'sender:heartbeat';
 
     protected $description = 'Record that the platform scheduler ran (point your cPanel Cron Job here)';
 
-    public function handle(CronHeartbeat $heartbeat): int
+    public function handle(RunRecorder $recorder): int
     {
-        $heartbeat->record();
+        $this->recordRun($recorder);
 
-        $this->info('Heartbeat recorded.');
+        try {
+            $this->completeRun();
 
-        $this->line('cron capability: '.app(CapabilityRegistry::class)
-            ->status(CapabilitySubject::Cron)->label());
+            $this->info('Run recorded.');
+
+            $this->line('cron capability: '.app(CapabilityRegistry::class)
+                ->status(CapabilitySubject::Cron)->label());
+        } catch (Throwable $exception) {
+            $this->failRun($exception);
+
+            throw $exception;
+        }
 
         return self::SUCCESS;
     }

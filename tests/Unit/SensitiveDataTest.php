@@ -72,4 +72,47 @@ class SensitiveDataTest extends TestCase
 
         $this->assertIsArray(SensitiveData::redact($data));
     }
+
+    public function test_it_redacts_credentials_embedded_in_free_text(): void
+    {
+        // Key-based redaction cannot help here: the payload is a single string
+        // whose keys say nothing. Failure messages routinely quote the
+        // configuration that caused them, and are persisted, not just logged.
+        $message = 'auth failed for ops with password=hunter2 using api_key=abcdef123456';
+
+        $redacted = SensitiveData::redactText($message);
+
+        $this->assertStringNotContainsString('hunter2', $redacted);
+        $this->assertStringNotContainsString('abcdef123456', $redacted);
+        $this->assertStringContainsString(SensitiveData::REDACTED, $redacted);
+    }
+
+    public function test_free_text_redaction_accepts_colon_separated_and_quoted_values(): void
+    {
+        foreach ([
+            'token: abc123def',
+            'Authorization: "Bearer eyJhbGciOi"',
+            "api_key='sk-live-9f2'",
+        ] as $message) {
+            $redacted = SensitiveData::redactText($message);
+
+            foreach (['abc123def', 'eyJhbGciOi', 'sk-live-9f2'] as $secret) {
+                $this->assertStringNotContainsString($secret, $redacted, "leaked in: {$message}");
+            }
+        }
+    }
+
+    public function test_free_text_redaction_keeps_the_message_useful(): void
+    {
+        $redacted = SensitiveData::redactText('Connection refused by mail.example.com:587');
+
+        $this->assertSame('Connection refused by mail.example.com:587', $redacted);
+    }
+
+    public function test_free_text_redaction_does_not_mangle_ordinary_words(): void
+    {
+        $message = 'Extracted 150 addresses from 12 pages in 3.4s';
+
+        $this->assertSame($message, SensitiveData::redactText($message));
+    }
 }

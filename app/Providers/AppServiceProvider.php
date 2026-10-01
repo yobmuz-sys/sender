@@ -8,7 +8,7 @@ use App\Domain\System\Capabilities\CapabilityRegistry;
 use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Entitlements\DenyAllEntitlement;
 use App\Domain\System\Entitlements\Entitlement;
-use App\Domain\System\Services\CronHeartbeat;
+use App\Domain\System\Runs\RunObserver;
 use App\Domain\System\Services\HostCapabilityInspector;
 use App\Domain\Users\Permission;
 use Illuminate\Database\Eloquent\Model;
@@ -32,7 +32,7 @@ class AppServiceProvider extends ServiceProvider
             CapabilityRegistry::class,
             fn ($app) => new CapabilityRegistry(
                 $app->make(HostInspector::class),
-                $app->make(CronHeartbeat::class),
+                $app->make(RunObserver::class),
             ),
         );
     }

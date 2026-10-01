@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests;
 
+use App\Domain\System\Runs\RunRecorder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 
@@ -22,5 +23,16 @@ abstract class TestCase extends BaseTestCase
         // requiring a Vite build keeps `php artisan test` runnable on a clean
         // checkout with no Node step.
         $this->withoutVite();
+    }
+
+    /**
+     * Record one successful scheduled run, so tests that need cron to be
+     * healthy do not each have to know how that evidence is stored.
+     */
+    protected function recordRun(string $command = 'sender:heartbeat'): void
+    {
+        $recorder = app(RunRecorder::class);
+
+        $recorder->succeed($recorder->start($command));
     }
 }

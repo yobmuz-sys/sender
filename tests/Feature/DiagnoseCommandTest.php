@@ -10,7 +10,7 @@ use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\Enums\CapabilitySubject;
 use App\Domain\System\HostCapabilityReport;
-use App\Domain\System\Services\CronHeartbeat;
+use App\Domain\System\Runs\RunObserver;
 use Tests\TestCase;
 
 /**
@@ -43,7 +43,7 @@ class DiagnoseCommandTest extends TestCase
             CapabilityCheck::ready('PHP runtime', PHP_VERSION),
             CapabilityCheck::ready('storage', '', [], CapabilitySubject::Storage),
         ]);
-        app(CronHeartbeat::class)->record();
+        $this->recordRun();
 
         $this->assertSame(CapabilityStatus::Ready, $this->registry()->overall());
 
@@ -106,7 +106,7 @@ class DiagnoseCommandTest extends TestCase
             CapabilityRegistry::class,
             fn ($app) => new CapabilityRegistry(
                 $app->make(HostInspector::class),
-                $app->make(CronHeartbeat::class),
+                $app->make(RunObserver::class),
             ),
         );
     }

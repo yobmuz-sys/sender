@@ -9,7 +9,7 @@ use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\Enums\CapabilitySubject;
 use App\Domain\System\HostCapabilityReport;
-use App\Domain\System\Services\CronHeartbeat;
+use App\Domain\System\Runs\RunObserver;
 
 /**
  * The application-facing view of what this installation can do.
@@ -29,7 +29,7 @@ final class CapabilityRegistry
 
     public function __construct(
         private readonly HostInspector $inspector,
-        private readonly CronHeartbeat $cron,
+        private readonly RunObserver $runs,
     ) {}
 
     /**
@@ -39,7 +39,7 @@ final class CapabilityRegistry
     {
         return $this->report ??= HostCapabilityReport::fromChecks([
             ...$this->inspector->inspect()->checks,
-            $this->cron->check(),
+            $this->runs->check(),
         ]);
     }
 
