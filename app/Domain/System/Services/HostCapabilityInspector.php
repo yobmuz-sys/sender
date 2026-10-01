@@ -1,0 +1,309 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Domain\System\Services;
+
+use App\Domain\System\CapabilityCheck;
+use App\Domain\System\Enums\Limit;
+use App\Domain\System\HostCapabilityReport;
+use App\Domain\System\HostEnvironment;
+use App\Support\Bytes;
+use Illuminate\Database\Connection;
+use Illuminate\Support\Facades\DB;
+use Throwable;
+
+/**
+ * Inspects whether the current host can run the Sender platform.
+ *
+ * The inspector only reports what it can actually measure. Checks that need an
+ * external dependency the platform does not require (DNS resolution, outbound
+ * SMTP reachability) are deliberately absent until the feature that depends on
+ * them is implemented, so the report never claims a capability is untested.
+ */
+final class HostCapabilityInspector
+{
+    /**
+     * Storage and cache drivers that assume a service outside the shared
+     * hosting stack. Selecting one turns a working install into a broken one,
+     * so it is surfaced as a configuration problem rather than a host problem.
+     *
+     * @var list<string>
+     */
+    private const EXTERNAL_DRIVERS = ['redis', 'memcached', 'dynamodb', 'apc'];
+
+    private readonly HostEnvironment $environment;
+
+    public function __construct(?HostEnvironment $environment = null)
+    {
+        $this->environment = $environment ?? HostEnvironment::current();
+    }
+
+    public function inspect(): HostCapabilityReport
+    {
+        $checks = [
+            ...$this->runtimeChecks(),
+            ...$this->databaseChecks(),
+            ...$this->filesystemChecks(),
+            ...$this->driverChecks(),
+            ...$this->securityChecks(),
+        ];
+
+        return HostCapabilityReport::fromChecks($checks);
+    }
+
+    /**
+     * @return list<CapabilityCheck>
+     */
+    private function runtimeChecks(): array
+    {
+        $checks = [];
+
+        $minimum = (string) config('sender.requirements.php_minimum', '8.2.0');
+
+        $checks[] = version_compare($this->environment->phpVersion, $minimum, '>=')
+            ? CapabilityCheck::ready('PHP runtime', $this->environment->phpVersion." (minimum {$minimum})")
+            : CapabilityCheck::unavailable(
+                'PHP runtime',
+                $this->environment->phpVersion." is below the required {$minimum}",
+                ["Select a PHP version of at least {$minimum} in cPanel -> MultiPHP Manager."],
+            );
+
+        foreach ((array) config('sender.requirements.extensions', []) as $extension) {
+            $checks[] = extension_loaded((string) $extension)
+                ? CapabilityCheck::ready('ext: '.$extension)
+                : CapabilityCheck::unavailable(
+                    'ext: '.$extension,
+                    'not loaded',
+                    ["Enable the '{$extension}' extension in cPanel -> Select PHP Version."],
+                );
+        }
+
+        $memoryLimit = Bytes::fromIni($this->environment->memoryLimit);
+        $requiredMemory = (int) config('sender.requirements.memory_limit_bytes', 268435456);
+
+        $checks[] = $memoryLimit < 0
+            ? CapabilityCheck::degraded('memory_limit', 'unlimited', ['Cap memory_limit so runaway jobs can be interrupted.'])
+            : $this->compare(
+                'memory_limit',
+                $memoryLimit,
+                $requiredMemory,
+                '256M',
+                ['Raise memory_limit in cPanel -> Select PHP Version -> Options.'],
+            );
+
+        $executionTime = $this->environment->maxExecutionTimeSeconds;
+        $requiredExecutionTime = (int) config('sender.requirements.max_execution_time_seconds', 60);
+
+        // A value of 0 means "unlimited", which is the normal value under the
+        // CLI SAPI and is expected for cron-driven processing.
+        $checks[] = $executionTime === 0
+            ? CapabilityCheck::ready('max_execution_time', 'unlimited')
+            : $this->compare(
+                'max_execution_time',
+                $executionTime,
+                $requiredExecutionTime,
+                '60s',
+                ['Raise max_execution_time in cPanel -> Select PHP Version -> Options.'],
+                static fn (int $seconds): string => $seconds.'s',
+            );
+
+        $requiredUpload = Limit::MaxUploadBytes->value();
+
+        $checks[] = $this->compare(
+            'upload_max_filesize',
+            $this->environment->maxUploadBytes,
+            $requiredUpload,
+            Limit::MaxUploadBytes->humanValue(),
+            ['Raise upload_max_filesize/post_max_size, or lower the SENDER_LIMIT_MAX_UPLOAD_BYTES limit.'],
+        );
+
+        $checks[] = $this->compare(
+            'post_max_size',
+            $this->environment->maxPostBytes,
+            $requiredUpload,
+            Limit::MaxUploadBytes->humanValue(),
+            ['post_max_size must be at least as large as upload_max_filesize.'],
+        );
+
+        return $checks;
+    }
+
+    /**
+     * @return list<CapabilityCheck>
+     */
+    private function databaseChecks(): array
+    {
+        try {
+            $connection = DB::connection();
+            $connection->getPdo();
+
+            return [
+                CapabilityCheck::ready('database', sprintf(
+                    '%s %s',
+                    $connection->getDriverName(),
+                    $this->databaseVersion($connection),
+                )),
+            ];
+        } catch (Throwable) {
+            return [
+                CapabilityCheck::unavailable(
+                    'database',
+                    'connection failed',
+                    [
+                        'Verify DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME and DB_PASSWORD.',
+                        'Grant the database user access to the application database in cPanel -> MySQL Databases.',
+                    ],
+                ),
+            ];
+        }
+    }
+
+    /**
+     * Read the server version, tolerating drivers whose dialect differs.
+     *
+     * The version is informational only, so an unsupported dialect degrades to
+     * "unknown" instead of reporting the database as unavailable.
+     */
+    private function databaseVersion(Connection $connection): string
+    {
+        $queries = [
+            'mysql' => 'select version() as version',
+            'mariadb' => 'select version() as version',
+            'pgsql' => 'show server_version',
+            'sqlsrv' => 'select @@version as version',
+            'sqlite' => 'select sqlite_version() as version',
+        ];
+
+        try {
+            $query = $queries[$connection->getDriverName()] ?? 'select 1 as version';
+
+            return trim((string) $connection->selectOne($query)?->version);
+        } catch (Throwable) {
+            return 'version unknown';
+        }
+    }
+
+    /**
+     * @return list<CapabilityCheck>
+     */
+    private function filesystemChecks(): array
+    {
+        $checks = [];
+
+        $paths = [
+            'storage' => storage_path(),
+            'bootstrap/cache' => base_path('bootstrap/cache'),
+        ];
+
+        foreach ($paths as $label => $path) {
+            $checks[] = is_dir($path) && is_writable($path)
+                ? CapabilityCheck::ready("writable: {$label}")
+                : CapabilityCheck::unavailable(
+                    "writable: {$label}",
+                    is_dir($path) ? 'directory is not writable' : 'directory is missing',
+                    ["chmod 775 {$label} and confirm the owner is the PHP user."],
+                );
+        }
+
+        $minimumFree = (int) config('sender.requirements.min_free_disk_bytes', 536870912);
+        $free = @disk_free_space(base_path());
+
+        $checks[] = $free === false
+            ? CapabilityCheck::degraded('free disk space', 'unknown', ['Ask the host for the disk quota of the account.'])
+            : $this->compare(
+                'free disk space',
+                (int) $free,
+                $minimumFree,
+                '512M',
+                ['Extraction and campaign storage share this quota, so 512M is the practical floor.'],
+            );
+
+        return $checks;
+    }
+
+    /**
+     * @return list<CapabilityCheck>
+     */
+    private function driverChecks(): array
+    {
+        $checks = [];
+
+        $drivers = [
+            'session' => (string) config('session.driver'),
+            'queue' => (string) config('queue.default'),
+            'cache' => (string) config('cache.default'),
+        ];
+
+        foreach ($drivers as $label => $driver) {
+            $checks[] = in_array($driver, self::EXTERNAL_DRIVERS, true)
+                ? CapabilityCheck::unavailable(
+                    "{$label} driver",
+                    $driver,
+                    ["Sender requires no external services. Use the 'database' driver for {$label}."],
+                )
+                : CapabilityCheck::ready("{$label} driver", $driver);
+        }
+
+        return $checks;
+    }
+
+    /**
+     * @return list<CapabilityCheck>
+     */
+    private function securityChecks(): array
+    {
+        $checks = [];
+
+        $checks[] = (string) config('app.key') !== ''
+            ? CapabilityCheck::ready('application key')
+            : CapabilityCheck::unavailable(
+                'application key',
+                'APP_KEY is empty',
+                ['Run: php artisan key:generate'],
+            );
+
+        $isProduction = config('app.env') === 'production';
+
+        $checks[] = ! $isProduction || config('app.debug') === false
+            ? CapabilityCheck::ready('debug mode off')
+            : CapabilityCheck::unavailable(
+                'debug mode off',
+                'APP_DEBUG is enabled in production',
+                ['Set APP_DEBUG=false. Debug output can leak credentials and stack traces.'],
+            );
+
+        return $checks;
+    }
+
+    /**
+     * Compare a measured value against a configured minimum.
+     *
+     * A value below the minimum is DEGRADED rather than UNAVAILABLE: the host
+     * still works, it just works with less headroom, and the platform is built
+     * to stay inside that headroom through the configured limits.
+     *
+     * @param  list<string>  $remedies
+     * @param  (callable(int): string)|null  $format
+     */
+    private function compare(
+        string $name,
+        int $measured,
+        int $required,
+        string $humanRequired,
+        array $remedies = [],
+        ?callable $format = null,
+    ): CapabilityCheck {
+        $format ??= static fn (int $value): string => Bytes::humanize($value);
+
+        if ($measured >= $required) {
+            return CapabilityCheck::ready($name, $format($measured));
+        }
+
+        return CapabilityCheck::degraded(
+            $name,
+            sprintf('%s (needs %s)', $format($measured), $humanRequired),
+            $remedies !== [] ? $remedies : ["Raise {$name} to at least {$humanRequired} in cPanel -> Select PHP Version -> Options."],
+        );
+    }
+}
