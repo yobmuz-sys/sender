@@ -101,6 +101,12 @@ class UserController extends Controller
         }
 
         $user->fill($request->safe()->only(['name', 'email']));
+
+        if ($user->isDirty('email')) {
+            $user->email_verified_at = null;
+            $user->sendEmailVerificationNotification();
+        }
+
         $user->role = $newRole;
 
         if ($request->filled('password')) {

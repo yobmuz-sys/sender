@@ -7,15 +7,15 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
-> **Stage 3B — COMPLETE / VERIFIED**
-> The application surface and administration foundation: permission-aware
-> navigation, verified email, account management, user suspension, and a full
-> administrative surface over the Stage 3A evidence. No job engine, extractor,
-> or campaign sending has been implemented.
+> **Stage 3C — first extraction vertical slice**
+> Pasted text extraction is implemented end to end: persistence, bounded
+> database-queue processing, results, and CSV download. URL extraction, file
+> upload, other formats and SMTP campaign sending remain future work.
 
-**Stage 3A and 3B complete. The Stage 3 job engine itself has not started.**
+**Stage 3A and 3B complete. Stage 3C has landed the first workload; a
+general-purpose job engine still does not exist.**
 
-Accepted baseline: `6445a9c`. 253 tests / 702 assertions passing.
+Accepted baseline: `9b70bb8`. 261 tests / 721 assertions passing.
 
 The known limitations recorded in `README.md` (a `DEGRADED` developer machine, an
 empty `SENDER_REQUIRED_CAPABILITIES`, no production entitlement consumer, an
@@ -232,9 +232,44 @@ the surface on top of it:
 - The settings page iterated a nested configuration tree and passed arrays where
   the template expected scalars.
 
-**Still not started:** the job engine, the extractor, campaign sending,
-recipients, suppression, plans, usage tracking, the REST API and billing.
+**Still not started:** a general-purpose job engine, URL extraction, file upload,
+other file formats, campaign sending, recipients, suppression, plans, usage
+tracking, the REST API and billing.
 
-Stage 3C should be scoped to one real workload, chosen deliberately, rather than
-to the general-purpose engine — the engine has no stable shape until something
-is asked of it.
+---
+
+## What Stage 3C delivered
+
+The first real workload, chosen so the engine would have a shape grounded in
+something rather than guessed at. It is deliberately narrow.
+
+- **Pasted text extraction.** Content is persisted, then processed on the
+  database queue. Addresses are matched, lower-cased, validated and
+  de-duplicated within one extraction.
+- **Only the identifier crosses the queue boundary.** The worker reads content
+  back from the database, so a large paste cannot inflate the queued payload.
+- **Finite execution.** The job declares a `timeout` below the connection's
+  `retry_after`, so an overrunning worker is killed and retried rather than being
+  handed to a second worker while the first still runs.
+- **Idempotency.** Results carry a unique key on `(extraction_id, email)`, so a
+  retry cannot duplicate rows.
+- **Ownership protection.** Another account's extraction returns a
+  non-disclosing 404, not a 403 — a 403 would confirm the record exists and let
+  one account enumerate another's identifiers. The same applies to the CSV
+  download.
+- **CSV download** of the extracted addresses.
+
+**What this audit found and fixed.** The vertical slice was present but the job
+was never dispatched anywhere in the application: the test called `handle()`
+directly, so the suite passed while the workload did nothing. A pasted extraction
+sat at `pending` forever. The test had asserted `status: pending` — that
+assertion only held because the job never ran. Both are fixed, and the test now
+asserts the extraction reaches `completed`.
+
+The create form also offered **URL** and **file upload**, neither of which was
+implemented; the controller accepted `source_type` of `url` or `file` and stored
+a request the platform could not act on. Both are removed rather than left as
+claims. The form now states that URL extraction and upload are not available.
+
+**Still deferred:** URL extraction, XLSX, DOCX, PDF, XML, MX and DNS validation,
+SMTP campaign delivery, recipients, suppression, billing and the REST API.

@@ -25,10 +25,7 @@ final class AdminNavigation
             new NavigationItem(
                 'Overview',
                 'admin.dashboard',
-                // Reachable by any role carrying at least one permission.
-                // Role::isStaff() is defined as "has permissions", so this is a
-                // projection of the catalogue rather than a separate staff list.
-                permission: null,
+                Permission::ADMIN_VIEW,
                 matchPrefix: false,
             ),
             new NavigationItem('Users', 'admin.users.index', Permission::USERS_VIEW, matchPrefix: true),

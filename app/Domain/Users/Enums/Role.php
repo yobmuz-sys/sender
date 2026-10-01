@@ -59,6 +59,7 @@ enum Role: string
 
             // Read-only across the surface, able to help users and investigate.
             self::Support => [
+                Permission::ADMIN_VIEW,
                 Permission::USERS_VIEW,
                 Permission::CAMPAIGNS_VIEW,
                 Permission::JOBS_VIEW,
@@ -66,6 +67,7 @@ enum Role: string
             ],
 
             self::Operations => [
+                Permission::ADMIN_VIEW,
                 Permission::CAMPAIGNS_VIEW,
                 Permission::CAMPAIGNS_PAUSE,
                 Permission::JOBS_VIEW,
@@ -74,6 +76,7 @@ enum Role: string
             ],
 
             self::Billing => [
+                Permission::ADMIN_VIEW,
                 Permission::USERS_VIEW,
                 Permission::FEATURES_VIEW,
                 Permission::PLANS_VIEW,

@@ -74,7 +74,6 @@ class PageCompletenessTest extends TestCase
             'extractor' => ['/extractor'],
             'extractor new' => ['/extractor/new'],
             'extractor history' => ['/extractor/history'],
-            'extractor record' => ['/extractor/abc'],
             'files' => ['/files'],
             'files new' => ['/files/new'],
             'files record' => ['/files/abc'],
@@ -101,9 +100,11 @@ class PageCompletenessTest extends TestCase
     public static function adminPages(): array
     {
         return [
-            'dashboard' => ['/admin', Permission::USERS_VIEW],
+            'dashboard' => ['/admin', Permission::ADMIN_VIEW],
             'users' => ['/admin/users', Permission::USERS_VIEW],
             'users create' => ['/admin/users/create', Permission::USERS_CREATE],
+            'users detail' => ['/admin/users/1', Permission::USERS_VIEW],
+            'users edit' => ['/admin/users/1/edit', Permission::USERS_EDIT],
             'roles' => ['/admin/roles', Permission::USERS_VIEW],
             'features' => ['/admin/features', Permission::FEATURES_VIEW],
             'plans' => ['/admin/plans', Permission::PLANS_VIEW],
@@ -226,6 +227,13 @@ class PageCompletenessTest extends TestCase
             ->assertRedirect(route('verification.notice'));
     }
 
+    public function test_the_extractor_requires_a_confirmed_address(): void
+    {
+        $this->actingAs(User::factory()->unverified()->create())
+            ->get('/extractor')
+            ->assertRedirect(route('verification.notice'));
+    }
+
     /**
      * Every navigation entry names a real route.
      *
@@ -286,10 +294,6 @@ class PageCompletenessTest extends TestCase
                 ->assertOk()
                 ->assertSee('Not yet available');
         }
-
-        $this->actingAs(User::factory()->create())->get('/extractor')
-            ->assertOk()
-            ->assertSee('Feature not yet available');
     }
 
     public function test_placeholder_pages_do_not_query_a_domain_that_does_not_exist(): void

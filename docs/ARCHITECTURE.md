@@ -501,12 +501,57 @@ placeholders state they are placeholders.
 
 ## 12. Deferred by design
 
-Not built yet, on purpose: the extractor, the crawler, SMTP campaign delivery,
-recipients and suppression, the job engine, plans, entitlements, usage
-tracking, the REST API, PHP integration and billing. Each depends on foundations
-that did not exist before this stage, and building them first would mean
-retrofitting quotas, authorization, locking and logging around code that had
-already been written.
+Not built yet, on purpose: URL extraction, the crawler, file upload, XLSX/DOCX/
+PDF/XML parsing, MX and DNS validation, SMTP campaign delivery, recipients and
+suppression, a general-purpose job engine, plans, entitlements, usage tracking,
+the REST API, PHP integration and billing. Each depends on foundations that did
+not exist before this stage, and building them first would mean retrofitting
+quotas, authorization, locking and logging around code that had already been
+written.
+
+---
+
+## 14. The extraction workload
+
+Stage 3C. The first thing the platform is actually asked to do, chosen so the
+job engine would take a shape from a real requirement rather than a guess.
+
+### Only the identifier crosses the queue boundary
+
+`ProcessExtractionJob` takes an `int $extractionId` and reads the content back
+from the database. Passing the pasted text through the job constructor would put
+up to the input ceiling into every queue row, the database's `jobs` table, and
+the retry path — tripling a large payload for no benefit.
+
+### The form offers only what works
+
+The controller accepts `source_type` of `paste` alone. URL and file upload were
+offered in the form and accepted by validation while doing nothing, so a
+submission was stored, reported as an extraction, and never processed. An option
+the platform cannot honour is a claim, not a placeholder — placeholders say they
+are placeholders.
+
+### Another account's extraction is a 404, not a 403
+
+`abort_if($extraction->user_id !== auth()->id(), 404)`. A 403 confirms the record
+exists, which lets one account enumerate another's extraction identifiers and
+infer usage. The CSV download is guarded the same way.
+
+### Finite execution, declared on the job
+
+The job declares `$timeout` below the connection's `retry_after`, plus
+`maxExceptions`. Without it, a worker that overruns is handed to a second worker
+while the first is still running, and the same extraction is processed twice —
+the exact race the Stage 3A reservation invariant exists to prevent.
+
+Results are uniquely keyed on `(extraction_id, email)` and written with `upsert`,
+so a retry is idempotent rather than duplicating rows.
+
+### The content ceiling is the real bound
+
+Work is bounded by the 20,000-character input cap, not by the worker clock. The
+extraction is a single regex pass over already-persisted text, with no network
+access, so its cost is a function of its input.
 
 ---
 

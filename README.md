@@ -11,13 +11,12 @@ long-running daemons and root access are **not** required at any point.
 
 ## Current status
 
-> **Stage 3B — COMPLETE / VERIFIED**
-> The application surface and administration foundation: permission-aware
-> navigation, verified email, account management, user suspension, and a full
-> administrative surface over the Stage 3A evidence. No job engine, extractor,
-> or campaign sending has been implemented.
+> **Stage 3C — first extraction vertical slice**
+> Pasted text extraction is implemented end to end: persistence, bounded
+> database-queue processing, results, and CSV download. URL extraction, file
+> upload, other formats and SMTP campaign sending remain future work.
 
-Accepted baseline: `6445a9c`. 253 tests / 702 assertions passing.
+Accepted baseline: `9b70bb8`. 261 tests / 721 assertions passing.
 
 Implemented and tested:
 
@@ -84,10 +83,10 @@ should be "fixed" by weakening a threshold or a check.
    bypass the invariants checked at boot. Operators edit the environment and
    confirm with `sender:diagnose`.
 
-**Not** implemented, and deliberately so at this stage: the email extractor,
-the web crawler, SMTP campaign sending, recipients, suppression, plans,
-entitlements, usage tracking, a working job queue beyond reservation safety,
-PHP integration and billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
+**Not** implemented, and deliberately so at this stage: URL extraction, the web
+crawler, XLSX/DOCX/PDF/XML parsing, MX and DNS validation, SMTP campaign sending,
+recipients, suppression, plans, entitlements, usage tracking, PHP integration and
+billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -302,7 +301,8 @@ unauthenticated caller enumerate the host.
 | `/dashboard` | Account overview |
 | `/account/profile` | Name, locale, time zone (PATCH) |
 | `/account/security` | Password change (PUT) |
-| `/extractor`, `/files`, `/lists`, `/templates`, `/campaigns`, `/suppression`, `/analytics` | Product surfaces — staged shells, see the limitation above |
+| `/extractor` | Extraction: create, history, detail, CSV download. Requires a confirmed address |
+| `/files`, `/lists`, `/templates`, `/campaigns`, `/suppression`, `/analytics` | Product surfaces — staged shells, see the limitation above |
 
 ### Administration
 

@@ -54,8 +54,8 @@ class AccountController extends Controller
         $user->password = Hash::make((string) $request->string('password')->toString());
         $user->save();
 
-        // Everything else on this session was authorised with the old
-        // credential, so invalidate the rest of them.
+        // Regenerate the current session identifier so the new password does not
+        // continue to rely on the previous session state.
         $request->session()->regenerate();
 
         return back()->with('status', 'Your password has been changed.');

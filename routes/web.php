@@ -29,6 +29,7 @@ use App\Http\Controllers\Auth\PasswordResetLinkController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\Auth\VerifyEmailController;
 use App\Http\Controllers\DiagnosticsController;
+use App\Http\Controllers\ExtractorController;
 use App\Http\Controllers\PendingFeatureController;
 use Illuminate\Support\Facades\Route;
 
@@ -75,6 +76,7 @@ Route::middleware('guest')->group(function (): void {
 */
 
 Route::middleware('auth')->group(function (): void {
+    Route::get('dashboard', static fn () => view('dashboard'))->name('dashboard');
 
     // Email confirmation.
     Route::get('email/verify', EmailVerificationPromptController::class)->name('verification.notice');
@@ -85,8 +87,6 @@ Route::middleware('auth')->group(function (): void {
         ->middleware('throttle:6,1')
         ->name('verification.send');
 
-    Route::get('dashboard', static fn () => view('dashboard'))->name('dashboard');
-
     Route::post('logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 
     // Account. Always available to a signed-in account.
@@ -95,25 +95,19 @@ Route::middleware('auth')->group(function (): void {
     Route::get('account/security', [AccountController::class, 'security'])->name('account.security');
     Route::put('account/security', [AccountController::class, 'updatePassword'])->name('account.password.update');
 
-    /*
-    |----------------------------------------------------------------------
-    | Customer product surface
-    |----------------------------------------------------------------------
-    |
-    | Honest shells. They render a pending state rather than pretending the
-    | feature exists, so navigation can describe the whole product now without
-    | any page making a claim it cannot support.
-    |
-    */
+    Route::get('diagnostics', static fn () => redirect()->route('admin.system.diagnostics'))
+        ->middleware('can:'.Permission::SYSTEM_VIEW)
+        ->name('diagnostics');
+});
 
-    Route::get('extractor', PendingFeatureController::class)
-        ->defaults('section', 'extractor')->name('extractor.index');
-    Route::get('extractor/new', PendingFeatureController::class)
-        ->defaults('section', 'extractor')->defaults('record', 'new')->name('extractor.create');
-    Route::get('extractor/history', PendingFeatureController::class)
-        ->defaults('section', 'extractor')->defaults('record', 'history')->name('extractor.history');
-    Route::get('extractor/{extraction}', PendingFeatureController::class)
-        ->defaults('section', 'extractor')->name('extractor.show');
+Route::middleware(['auth', 'confirmed'])->group(function (): void {
+
+    Route::get('extractor', [ExtractorController::class, 'index'])->name('extractor.index');
+    Route::get('extractor/new', [ExtractorController::class, 'create'])->name('extractor.create');
+    Route::post('extractor', [ExtractorController::class, 'store'])->name('extractor.store');
+    Route::get('extractor/history', [ExtractorController::class, 'history'])->name('extractor.history');
+    Route::get('extractor/{extraction}', [ExtractorController::class, 'show'])->name('extractor.show');
+    Route::get('extractor/{extraction}/download', [ExtractorController::class, 'download'])->name('extractor.download');
 
     Route::get('files', PendingFeatureController::class)
         ->defaults('section', 'files')->name('files.index');
@@ -149,21 +143,6 @@ Route::middleware('auth')->group(function (): void {
         ->defaults('section', 'suppression')->name('suppression.index');
     Route::get('analytics', PendingFeatureController::class)
         ->defaults('section', 'analytics')->name('analytics.index');
-
-    /*
-    |----------------------------------------------------------------------
-    | Legacy diagnostics entry point
-    |----------------------------------------------------------------------
-    |
-    | Kept for anyone already using the bookmark, and redirected rather than
-    | duplicated: two pages rendering the same host detail would be two places
-    | to keep in step.
-    |
-    */
-
-    Route::get('diagnostics', static fn () => redirect()->route('admin.system.diagnostics'))
-        ->middleware('can:'.Permission::SYSTEM_VIEW)
-        ->name('diagnostics');
 });
 
 /*
@@ -178,7 +157,7 @@ Route::middleware('auth')->group(function (): void {
 |
 */
 
-Route::middleware(['auth', 'confirmed'])
+Route::middleware(['auth', 'confirmed', 'can:'.Permission::ADMIN_VIEW])
     ->prefix('admin')
     ->name('admin.')
     ->group(function (): void {

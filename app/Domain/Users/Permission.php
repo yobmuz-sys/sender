@@ -14,6 +14,8 @@ namespace App\Domain\Users;
  */
 final class Permission
 {
+    public const ADMIN_VIEW = 'admin.view';
+
     public const USERS_VIEW = 'users.view';
 
     public const USERS_CREATE = 'users.create';
@@ -62,6 +64,9 @@ final class Permission
     public static function groups(): array
     {
         return [
+            'Administration' => [
+                self::ADMIN_VIEW,
+            ],
             'Users' => [
                 self::USERS_VIEW,
                 self::USERS_CREATE,

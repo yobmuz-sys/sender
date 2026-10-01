@@ -10,6 +10,7 @@ use App\Domain\System\Enums\CapabilitySubject;
 use App\Domain\System\Runs\RunRecorder;
 use App\Domain\Users\Enums\Role;
 use App\Domain\Users\Enums\UserStatus;
+use App\Domain\Users\Permission;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -33,7 +34,7 @@ class DashboardController extends Controller
 
     public function __invoke(Request $request): View
     {
-        abort_unless($request->user()?->isStaff() ?? false, 403);
+        abort_unless($request->user()?->can(Permission::ADMIN_VIEW) ?? false, 403);
 
         $recentRuns = collect($this->runs->recent('sender:heartbeat', 10));
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Requests\Admin;
 
 use App\Domain\Users\Enums\Role;
+use App\Models\User;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -28,9 +29,11 @@ class UpdateUserRequest extends FormRequest
      */
     public function rules(): array
     {
+        $user = $this->route('user');
+
         return [
             'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'lowercase', 'email', 'max:255'],
+            'email' => ['required', 'string', 'lowercase', 'email', 'max:255', Rule::unique(User::class)->ignore($user?->getKey())],
             'role' => ['required', Rule::enum(Role::class)],
             'password' => ['nullable', 'confirmed', Password::defaults()],
         ];
