@@ -36,7 +36,7 @@ class DashboardController extends Controller
     {
         abort_unless($request->user()?->can(Permission::ADMIN_VIEW) ?? false, 403);
 
-        $recentRuns = collect($this->runs->recent('sender:heartbeat', 10));
+        $recentRuns = collect($this->runs->recent('sender:work', 10));
 
         $staffRoles = array_values(array_map(
             static fn (Role $role): string => $role->value,

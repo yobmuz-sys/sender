@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Domain\Extraction\Extractor;
 use App\Domain\System\Capabilities\CapabilityRegistry;
 use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Entitlements\DenyAllEntitlement;
@@ -28,6 +29,11 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(Entitlement::class, DenyAllEntitlement::class);
 
         $this->app->singleton(HostInspector::class, HostCapabilityInspector::class);
+
+        // The extractor's chunk and batch sizes come from configuration, so it
+        // is resolved through the container rather than constructed with
+        // integers the container cannot supply.
+        $this->app->singleton(Extractor::class, static fn (): Extractor => Extractor::fromConfiguration());
 
         // Capability state is memoised for the life of the request so the
         // report is measured once and every consumer agrees on the answer.

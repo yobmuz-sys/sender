@@ -54,7 +54,7 @@ written for a piece of behaviour, that is a signal about the design.
 
 ```bash
 php artisan sender:diagnose
-php artisan sender:heartbeat
+php artisan sender:work
 php artisan serve
 ```
 

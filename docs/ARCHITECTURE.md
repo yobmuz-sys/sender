@@ -549,9 +549,111 @@ so a retry is idempotent rather than duplicating rows.
 
 ### The content ceiling is the real bound
 
-Work is bounded by the 20,000-character input cap, not by the worker clock. The
-extraction is a single regex pass over already-persisted text, with no network
-access, so its cost is a function of its input.
+Work is bounded by the byte ceiling enforced at submission, not by the worker
+clock. The extraction is a single regex pass over already-persisted text, with no
+network access, so its cost is a function of its input.
+
+### The ceiling is bytes, and fails closed
+
+The limit is read from `DeploymentLimit::MaxTextInputBytes` and enforced with
+`strlen`, not by a validation `max` rule. Laravel counts *characters* for string
+`max`, so `'max:1048576'` accepts a megabyte of characters — up to four
+megabytes of UTF-8 — which is the opposite of what a memory ceiling is for. A
+limit configured to zero fails closed rather than accepting everything, because
+an unset ceiling is a configuration fault and the safe reading of "no limit
+configured" is not "unlimited".
+
+### A missing worker is the failure mode nobody tests for
+
+Stage 3C shipped a dispatched job with no command to pick it up. The suite did
+not catch it, and could not have: `phpunit.xml` sets `QUEUE_CONNECTION=sync`, so
+the dispatch executed inline and every test passed. Production sets
+`QUEUE_CONNECTION=database`, where the same dispatch sits in a table forever.
+
+This is worth recording as a general hazard. A queue whose behaviour differs
+between test and production configuration has an untested path by construction,
+and "the suite is green" is not evidence about that path. `QueueWorkerTest`
+switches the driver to `database` and drives the real command for exactly this
+reason. Any future worker-shaped change needs the same treatment.
+
+---
+
+## 15. The worker
+
+### `sender:work`, bounded and exiting
+
+```
+cPanel Cron
+    -> php artisan sender:work
+        -> bounded number of jobs
+        -> bounded runtime
+        -> exit
+```
+
+Not `while (true)`. On shared hosting a resident process is killed when the
+invocation ends and cannot be supervised, so a daemon is not a degraded worker,
+it is a non-worker.
+
+The command delegates to Laravel's own `queue:work` with `--stop-when-empty`,
+`--max-time`, `--max-jobs`, `--timeout` and `--tries`. Reimplementing queue
+internals would create a second implementation to keep correct; what this command
+owns is the bounds, the operator kill switch, and the run evidence.
+
+### Bounds come from DeploymentLimit
+
+`WorkerBounds` resolves every value. An override on the command line may only
+tighten a ceiling, never raise one — raising the runtime past the reservation
+window would defeat the invariant the whole mechanism exists to protect.
+
+### It refuses to start rather than start unsafely
+
+If `retry_after < max_worker_runtime + margin`, the worker exits non-zero without
+recording a run. Starting anyway is precisely the condition in which the same job
+is handed to a second worker while the first still holds it, and the extraction
+is processed twice. Refusal is the behaviour that makes the invariant real rather
+than advisory.
+
+### Disabled scheduler leaves no evidence
+
+If the operator has switched the `cron` subsystem off, the command does nothing
+and records nothing. A stream of `succeeded` runs for a scheduler that is
+deliberately switched off would be read as proof that cron works.
+
+### Cron evidence comes from the workload
+
+The probe command moved from `sender:heartbeat` to `sender:work`. A heartbeat
+proves only that the scheduler fires; the worker proves that it fires *and* that
+the platform did its work. A deployment whose queue is misconfigured so that
+every run fails would otherwise be reported as a healthy scheduler.
+
+`RecordsScheduledRun` records only the first whitespace-delimited token of the
+signature. A command with options would otherwise record
+`sender:work {--max-jobs=...}` as its own name, and no history query would ever
+match it.
+
+### One run table
+
+Worker runs use the same `scheduled_runs` table as every other scheduled
+command, through the same `RunRecorder`. There is no worker-specific run store,
+because a second one would be a second thing to keep consistent and an operator
+would have to look in two places to answer "did it run".
+
+---
+
+## 16. Paginated surfaces
+
+Extraction history and extraction results are both paginated, and the CSV
+download is chunked.
+
+`->get()` on the history and `load('results')` on the detail page each loaded an
+unbounded set, which contradicted the bounded-processing claim elsewhere in the
+same stage. A megabyte of pasted text can hold a great many addresses, and
+rendering all of them into one response is the behaviour the streaming extractor
+exists to avoid.
+
+Ownership is unaffected: every query is scoped to the authenticated account, and
+another account's extraction is a 404 rather than a 403, because a 403 confirms
+the record exists and permits enumeration.
 
 ---
 

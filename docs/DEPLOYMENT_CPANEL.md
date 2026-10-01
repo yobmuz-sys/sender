@@ -219,9 +219,9 @@ disabled on a production account if the extra visibility is unwanted.
 ## 7. Cron
 
 **Stage 1 required no cron at all.** Stage 2 only *observed* it. Stage 3A made
-the observation durable and recorded outcomes, but still no background work
-exists, so this entry proves nothing yet except that the platform can be
-observed.
+the observation durable and recorded outcomes. Stage 3D gave cron real work:
+`sender:work` drains the database queue, so this entry is what makes the
+platform's background processing happen at all.
 
 cPanel offers no way for PHP to ask whether a cron entry is configured, so the
 platform cannot detect cron. It can only record that the scheduled command
@@ -229,7 +229,7 @@ actually ran and infer the capability from that. Add this entry in cPanel ->
 Cron Jobs:
 
 ```
-*/5 * * * * cd /home/USER/sender && /usr/local/bin/php artisan sender:heartbeat >> /dev/null 2>&1
+*/5 * * * * cd /home/USER/sender && /usr/local/bin/php artisan sender:work >> /dev/null 2>&1
 ```
 
 Use the absolute path to the PHP binary your account has; confirm it under
@@ -240,12 +240,28 @@ cPanel -> MultiPHP Manager. Set the frequency to five minutes, and expect:
 | never run | `UNKNOWN` |
 | last run succeeded within `SENDER_CRON_STALE_AFTER_SECONDS` (default 900) | `READY` |
 | last run succeeded but older than that | `DEGRADED` |
-| last run **failed** | `UNKNOWN` — liveness is not proven |
+| last run **failed** | `DEGRADED` — the scheduler fires but is not doing its work |
 
-That last row is why the outcome is recorded. A cron entry that is still being
-invoked but keeps failing is a different problem from an entry that has stopped
-being invoked, and they have opposite remedies. A heartbeat could only ever
-answer the second question.
+That last row is why the outcome is recorded, and why the probe command moved
+from `sender:heartbeat` to `sender:work`. A cron entry that is still being
+invoked but keeps failing — a queue pointing at a table that does not exist, for
+instance — is a different problem from an entry that has stopped being invoked,
+and they have opposite remedies. A heartbeat could only ever answer the second
+question. `sender:heartbeat` remains available and its runs still count as
+evidence, it is simply not the primary signal.
+
+The worker is bounded and exits. Each invocation processes at most
+`SENDER_QUEUE_MAX_JOBS_PER_RUN` jobs (default 25) and stops after
+`SENDER_DEPLOYMENT_LIMIT_MAX_WORKER_RUNTIME_SECONDS` (default 240). If the queue
+is deeper than one run can clear, the next cron entry continues — so choose a
+frequency that matches your backlog rather than expecting one entry to drain
+everything.
+
+The worker refuses to start when the reservation invariant does not hold, i.e.
+when `DB_QUEUE_RETRY_AFTER` is less than the worker runtime plus the margin.
+Starting anyway would let the same job be handed to a second worker while the
+first still held it. `sender:diagnose` reports this as
+`queue reservation window`.
 
 Each run appends a row to `scheduled_runs` recording the command, its duration
 and a redacted failure message, so you can inspect the history directly in the
@@ -337,7 +353,7 @@ than a missing cache.
 | `smtp` shows `UNKNOWN` | Never verified | Run `php artisan sender:verify-smtp --to=you@example.com` |
 | Password reset reports success but no mail arrives | `MAIL_MAILER` is `log`/`array`, or the relay is wrong | Verify SMTP; `log` discards messages silently |
 | Queue shows `UNAVAILABLE` on the `database` driver | Reservation invariant violated | See section 7a; raise `retry_after` or lower the worker runtime |
-| Cron shows `UNKNOWN` | No run has been recorded, or the last run failed | Add the `sender:heartbeat` cron entry; check `scheduled_runs.error` |
+| Cron shows `UNKNOWN` | No run has been recorded, or the last run failed | Add the `sender:work` cron entry; check `scheduled_runs.error` |
 | Cron shows `DEGRADED` | Runs succeeded but the last one is stale | Check the cron log in cPanel |
 | `cache:clear` did not reset cron | Correct: run evidence is durable | Expected; evidence lives in `scheduled_runs`, not the cache |
 | 500 on every page | `APP_KEY` missing, or `storage/` not writable | `php artisan key:generate`, `chmod 775 storage` |

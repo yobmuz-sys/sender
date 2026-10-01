@@ -59,6 +59,16 @@ return [
         */
         'queue' => [
             'reservation_margin_seconds' => (int) env('SENDER_QUEUE_RESERVATION_MARGIN_SECONDS', 60),
+
+            /*
+            | How many jobs one `sender:work` invocation will process.
+            |
+            | A cron-invoked worker must exit, so it cannot simply drain the
+            | queue. Capping the batch bounds the wall-clock time regardless of
+            | how deep the backlog is, which is what makes the command safe to
+            | point a shared-hosting cron entry at.
+            */
+            'max_jobs_per_run' => (int) env('SENDER_QUEUE_MAX_JOBS_PER_RUN', 25),
         ],
 
         /*
@@ -90,6 +100,29 @@ return [
         'cron' => true,
         'url_fetch' => true,
         'smtp' => true,
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
+    | Pasted-text extraction
+    |---------------------------------------------------------------------------
+    |
+    | How the worker reads a stored extraction. Processing is chunked rather
+    | than whole-string so peak memory stays flat as the input ceiling rises,
+    | and results are written in batches rather than accumulated.
+    |
+    | The input ceiling itself is `deployment_limits.max_text_input_bytes`. It
+    | is deliberately not restated here: two sources of truth for one limit is
+    | how a limit stops meaning anything.
+    */
+    'extraction' => [
+        // Bytes read per pass. Sized well above one email address so the
+        // overlap between chunks can never truncate a real candidate.
+        'chunk_bytes' => (int) env('SENDER_EXTRACTION_CHUNK_BYTES', 64 * 1024),
+
+        // Rows written per batch. Uses the shared deployment limit rather than
+        // a value of its own.
+        'batch_size' => (int) env('SENDER_DEPLOYMENT_LIMIT_MAX_JOB_BATCH_SIZE', 250),
     ],
 
     /*

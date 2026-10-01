@@ -7,15 +7,16 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
-> **Stage 3C — first extraction vertical slice**
-> Pasted text extraction is implemented end to end: persistence, bounded
-> database-queue processing, results, and CSV download. URL extraction, file
-> upload, other formats and SMTP campaign sending remain future work.
+> **Stage 3D — extraction operational hardening**
+> The pasted-text workload now runs the way it always claimed to: a bounded
+> `sender:work` worker on the database queue, durable run evidence, streaming
+> bounded-memory extraction, and paginated history and results. URL extraction,
+> file upload, other formats and SMTP campaign sending remain future work.
 
-**Stage 3A and 3B complete. Stage 3C has landed the first workload; a
-general-purpose job engine still does not exist.**
+**Stage 3A-3D complete. The first workload runs in production; a general-purpose
+job engine still does not exist.**
 
-Accepted baseline: `9b70bb8`. 261 tests / 721 assertions passing.
+Accepted baseline: `d2e56eb`. 304 tests / 848 assertions passing.
 
 The known limitations recorded in `README.md` (a `DEGRADED` developer machine, an
 empty `SENDER_REQUIRED_CAPABILITIES`, no production entitlement consumer, an
@@ -273,3 +274,73 @@ claims. The form now states that URL extraction and upload are not available.
 
 **Still deferred:** URL extraction, XLSX, DOCX, PDF, XML, MX and DNS validation,
 SMTP campaign delivery, recipients, suppression, billing and the REST API.
+
+---
+
+## What Stage 3D delivered
+
+Stage 3C proved the extractor *could* work. Stage 3D makes it work in the
+environment the application was actually designed for.
+
+The finding that motivated this stage is a gap between what the suite proved and
+what production would have done. `phpunit.xml` sets `QUEUE_CONNECTION=sync`, so
+every dispatch executed inline and every test passed. Production `.env.example`
+sets `QUEUE_CONNECTION=database`. There was no `sender:work` command. The
+consequence, precisely:
+
+    web request -> dispatch -> jobs table -> nothing ever picks it up
+
+A green suite and a non-functional platform, which is the worst possible
+combination: the evidence looked like coverage.
+
+- **``sender:work``** processes a bounded number of jobs within a bounded
+  runtime and exits. It wraps Laravel's own ``queue:work`` rather than
+  reimplementing queue internals, and owns only the bounds, the operator kill
+  switch and the run evidence.
+- **Every bound comes from ``DeploymentLimit``** or configuration. A magic
+  runtime in the command would be the first thing to drift out of step with the
+  reservation invariant it has to satisfy.
+- **It refuses to start when the reservation invariant does not hold**, rather
+  than creating the double-processing condition the invariant exists to prevent.
+- **A runtime or job override can only tighten the ceiling**, never raise it.
+- **Durable run evidence** via the existing ``RunRecorder``. No second run table
+  and no second heartbeat system.
+- **The cron probe moved to ``sender:work``**, because a scheduler that fires and
+  successfully processes the queue is stronger evidence than one that fires and
+  does nothing. A deployment failing every night on a misconfigured queue would
+  otherwise be reported healthy. ``sender:heartbeat`` is retained and its runs
+  still count.
+
+### Extraction hardening
+
+- **The input ceiling is a byte limit read from
+  ``DeploymentLimit::MaxTextInputBytes``**, enforced with ``strlen``. The old
+  ``max:20000`` was a literal *and* was not a byte limit: Laravel counts
+  characters, so a character-based rule accepts up to four times the intended
+  bytes on multi-byte input. An unconfigured limit now fails closed.
+- **Processing is chunked and batched.** The job no longer runs one
+  ``preg_match_all`` over the whole content and holds every candidate and every
+  pending row in memory before writing. Chunks overlap by 320 bytes so an
+  address spanning a boundary is not lost.
+- **Idempotency is enforced by the database**, not an ``exists()`` check that
+  leaves a race between the check and the write.
+- **Explicit state transitions** ``pending -> processing -> completed|failed``
+  with ``started_at``, ``completed_at``, ``processed_count`` and ``failed_count``.
+  A throwing job records a failure rather than leaving a row claiming success,
+  and the customer can see it.
+- **History and results are paginated.** ``->get()`` and ``load('results')`` both
+  loaded unbounded sets; the detail page now paginates results and the CSV
+  download streams in 500-row chunks.
+- **Pasted content is never serialised** into a queue payload, a log line or a
+  model array.
+
+### What remains true about the capability
+
+TXT and CSV are accepted as *pasted* content: one regex pass over whatever text
+is submitted. There is still no file upload and no dedicated CSV parser. The
+documentation says exactly that rather than claiming CSV support the code does
+not have.
+
+**Still deferred:** URL extraction, file upload, XLSX, DOCX, PDF, XML, MX and
+DNS validation, SMTP campaign delivery, recipients, suppression, billing and the
+REST API.

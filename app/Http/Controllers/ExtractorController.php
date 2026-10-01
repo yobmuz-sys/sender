@@ -4,22 +4,49 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Domain\Extraction\ExtractionStatus;
 use App\Jobs\ProcessExtractionJob;
 use App\Models\Extraction;
 use App\Models\ExtractionResult;
+use App\Rules\WithinByteCeiling;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
+/**
+ * The pasted-text extraction workload.
+ *
+ * Every query is scoped to the authenticated account and a record belonging to
+ * somebody else is answered with 404 rather than 403, because a 403 confirms
+ * the record exists and lets one account enumerate another's extraction
+ * identifiers.
+ *
+ * Results are paginated rather than loaded. An extraction of a megabyte of text
+ * can hold a great many addresses, and rendering all of them into one response
+ * is exactly the unbounded behaviour the rest of this stage removes.
+ */
 class ExtractorController extends Controller
 {
+    /**
+     * Rows of extraction history per page.
+     */
+    private const HISTORY_PER_PAGE = 20;
+
+    /**
+     * Rows of results per page.
+     *
+     * Results are what a customer actually reads, so this is larger than the
+     * history page; the CSV download exists for the whole set.
+     */
+    private const RESULTS_PER_PAGE = 100;
+
     public function index(Request $request): View
     {
         $extractions = Extraction::query()
             ->where('user_id', $request->user()->id)
             ->latest()
-            ->get();
+            ->paginate(self::HISTORY_PER_PAGE);
 
         return view('extractor.index', [
             'extractions' => $extractions,
@@ -38,26 +65,26 @@ class ExtractorController extends Controller
             // accepted, because accepting them would store a request the
             // platform cannot act on and then report it as an extraction.
             'source_type' => ['required', 'string', 'in:paste'],
-            'content' => ['nullable', 'string', 'max:20000'],
+
+            // A byte ceiling from the deployment limits, measured with strlen
+            // rather than counted in characters. Rejects before dispatch, so
+            // oversized input never reaches the queue or the database.
+            'content' => ['required', 'string', WithinByteCeiling::forTextInput()],
         ]);
-
-        $content = (string) ($validated['content'] ?? '');
-
-        if (trim($content) === '') {
-            abort(422, 'Paste content is required.');
-        }
 
         $extraction = Extraction::query()->create([
             'user_id' => $request->user()->id,
             'source_type' => $validated['source_type'],
-            'content' => $content,
-            'status' => 'pending',
+            'content' => $validated['content'],
+            'status' => ExtractionStatus::Pending->value,
             'found_count' => 0,
+            'processed_count' => 0,
+            'failed_count' => 0,
         ]);
 
-        // Only the identifier crosses the queue boundary. The pasted content is
-        // read back from the database by the worker, so a large paste cannot
-        // inflate the queued payload.
+        // Only the identifier crosses the queue boundary; the worker reads the
+        // content back. A large paste therefore does not inflate the queued
+        // payload.
         ProcessExtractionJob::dispatch($extraction->id);
 
         return redirect()->route('extractor.show', $extraction);
@@ -76,21 +103,28 @@ class ExtractorController extends Controller
 
         $record = Extraction::query()->find((int) $extraction);
 
-        if ($record === null) {
+        if ($record === null || $record->user_id !== $request->user()->id) {
             abort(404);
         }
 
-        abort_if($record->user_id !== $request->user()->id, 404);
-
         return view('extractor.show', [
-            'extraction' => $record->load('results'),
+            'extraction' => $record,
+            // Paginated rather than eager-loaded. `load('results')` here would
+            // hold every address for every extraction a customer opens.
+            'results' => $record->results()
+                ->orderBy('id')
+                ->paginate(self::RESULTS_PER_PAGE),
         ]);
     }
 
+    /**
+     * Stream every result for one extraction as CSV.
+     *
+     * Streamed through the response rather than collected, so downloading a
+     * large extraction does not build the whole set in memory first.
+     */
     public function download(Extraction $extraction): StreamedResponse
     {
-        // A non-disclosing 404, not a 403: confirming that the record exists
-        // would let one account enumerate another's extraction identifiers.
         abort_if($extraction->user_id !== auth()->id(), 404);
 
         return response()->streamDownload(function () use ($extraction): void {
@@ -98,9 +132,14 @@ class ExtractorController extends Controller
 
             fputcsv($handle, ['email']);
 
-            $extraction->results()->orderBy('id')
-                ->each(function (ExtractionResult $result) use ($handle): void {
-                    fputcsv($handle, [$result->email]);
+            // Chunked so the download never materialises the full result set.
+            $extraction->results()
+                ->orderBy('id')
+                ->chunkById(500, function ($rows) use ($handle): void {
+                    foreach ($rows as $row) {
+                        /** @var ExtractionResult $row */
+                        fputcsv($handle, [$row->email]);
+                    }
                 });
 
             fclose($handle);

@@ -27,10 +27,54 @@ final class RunObserver
 
     /**
      * The command whose execution proves the platform scheduler is alive.
+     *
+     * This was `sender:heartbeat`, which existed only because nothing else ran
+     * from cron. Now that `sender:work` does the platform's real work, it is
+     * the better evidence: a cron entry that succeeds proves both that the
+     * scheduler fires *and* that the platform got something done, whereas the
+     * heartbeat only proved the first. A deployment with `sender:work` failing
+     * every night because the queue is misconfigured would otherwise be
+     * reported as a healthy scheduler.
+     *
+     * `sender:heartbeat` is retained for installations that still call it; its
+     * evidence is not ignored, it simply is not the primary signal.
      */
     public function probeCommand(): string
     {
-        return 'sender:heartbeat';
+        return 'sender:work';
+    }
+
+    /**
+     * Every command whose runs count as scheduler evidence, most preferred
+     * first.
+     *
+     * @return list<string>
+     */
+    public function probeCommands(): array
+    {
+        return ['sender:work', 'sender:heartbeat'];
+    }
+
+    /**
+     * The most recent run across every probe command.
+     */
+    public function latestProbeRun(): ?ScheduledRun
+    {
+        $latest = null;
+
+        foreach ($this->probeCommands() as $command) {
+            $run = $this->runs->latest($command);
+
+            if ($run === null) {
+                continue;
+            }
+
+            if ($latest === null || $run->started_at->greaterThan($latest->started_at)) {
+                $latest = $run;
+            }
+        }
+
+        return $latest;
     }
 
     /**
@@ -38,7 +82,7 @@ final class RunObserver
      */
     public function check(): CapabilityCheck
     {
-        $latest = $this->runs->latest($this->probeCommand());
+        $latest = $this->latestProbeRun();
         $subject = CapabilitySubject::Cron;
 
         if ($latest === null) {
@@ -46,8 +90,8 @@ final class RunObserver
                 'cron scheduler',
                 'no scheduled run has ever been recorded',
                 [
-                    'Configure a cPanel Cron Job to call: php artisan sender:heartbeat',
-                    'Background processing is not yet implemented; cron is only being observed at this stage.',
+                    'Configure a cPanel Cron Job to call: php artisan sender:work',
+                    'That command processes queued work, exits, and records the run.',
                 ],
                 $subject,
             );
@@ -88,10 +132,26 @@ final class RunObserver
     /**
      * The most recent runs, for diagnostics.
      *
+     * Across every probe command, so a deployment still calling the heartbeat
+     * does not appear to have no run history at all.
+     *
      * @return list<ScheduledRun>
      */
     public function recent(int $limit = 5): array
     {
-        return $this->runs->recent($this->probeCommand(), $limit);
+        $runs = [];
+
+        foreach ($this->probeCommands() as $command) {
+            foreach ($this->runs->recent($command, $limit) as $run) {
+                $runs[] = $run;
+            }
+        }
+
+        usort(
+            $runs,
+            static fn (ScheduledRun $a, ScheduledRun $b): int => $b->started_at <=> $a->started_at,
+        );
+
+        return array_slice($runs, 0, $limit);
     }
 }

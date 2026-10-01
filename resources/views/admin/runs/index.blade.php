@@ -6,6 +6,22 @@
         description="Durable, append-only evidence of what the scheduler actually did."
     />
 
+    {{-- Filter across every command that counts as scheduler evidence, so a
+         deployment still calling the heartbeat is not shown as having no
+         history at all. --}}
+    <div class="mb-6 flex flex-wrap items-center gap-2">
+        <a href="{{ route('admin.runs.index') }}"
+           class="rounded-full px-3 py-1 text-xs font-semibold
+                  {{ $command === '' ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700' }}">All</a>
+        @foreach ($commands as $available)
+            <a href="{{ route('admin.runs.index', ['command' => $available]) }}"
+               class="rounded-full px-3 py-1 text-xs font-semibold
+                      {{ $command === $available ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700' }}">
+                {{ $available }}
+            </a>
+        @endforeach
+    </div>
+
     <div class="mb-6 grid gap-4 sm:grid-cols-3">
         <x-stat label="Cron capability"
                 :value="$fresh ? 'READY' : ($latest === null ? 'UNKNOWN' : 'DEGRADED')"

@@ -30,7 +30,24 @@ trait RecordsScheduledRun
     protected function recordRun(RunRecorder $recorder): void
     {
         $this->recorder = $recorder;
-        $this->scheduledRun = $recorder->start($this->signature ?? static::class);
+        $this->scheduledRun = $recorder->start($this->runCommandName());
+    }
+
+    /**
+     * The command's name, without its option definitions.
+     *
+     * `$signature` carries the whole definition, so a command with options
+     * would record `sender:work {--max-jobs=} ...` as its own name and then
+     * never match the `command` index when something asked for its history.
+     * The name is the first whitespace-delimited token.
+     */
+    private function runCommandName(): string
+    {
+        $signature = $this->signature ?? static::class;
+
+        $name = strtok(trim($signature), " \n\r\t");
+
+        return $name === false ? $signature : $name;
     }
 
     /**
@@ -52,6 +69,20 @@ trait RecordsScheduledRun
     {
         if ($this->scheduledRun !== null && $this->recorder !== null) {
             $this->recorder->fail($this->scheduledRun, $exception->getMessage());
+        }
+    }
+
+    /**
+     * Close the run as failed with an outcome the command chose to record.
+     *
+     * For a command that did not throw but ended in a failure state — a
+     * non-zero exit it observed, rather than an exception — so that the reason
+     * survives with the same shape as any other failure.
+     */
+    protected function failRunWith(string $message, int $processed = 0, int $failed = 0): void
+    {
+        if ($this->scheduledRun !== null && $this->recorder !== null) {
+            $this->recorder->fail($this->scheduledRun, $message, $processed, $failed);
         }
     }
 }

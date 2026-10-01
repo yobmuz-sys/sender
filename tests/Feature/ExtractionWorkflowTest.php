@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Domain\Extraction\Extractor;
 use App\Domain\Users\Enums\Role;
 use App\Jobs\ProcessExtractionJob;
 use App\Models\Extraction;
@@ -74,9 +75,12 @@ class ExtractionWorkflowTest extends TestCase
         $user = User::factory()->role(Role::User)->create();
         $extraction = Extraction::factory()->for($user)->state(['status' => 'pending'])->create();
 
-        $job = new ProcessExtractionJob($extraction->id);
-        $job->handle();
-        $job->handle();
+        $extractor = Extractor::fromConfiguration();
+
+        // Run the same work twice. Results are keyed on (extraction_id, email)
+        // with a unique constraint, so a retry converges rather than duplicating.
+        (new ProcessExtractionJob($extraction->id))->handle($extractor);
+        (new ProcessExtractionJob($extraction->id))->handle($extractor);
 
         $this->assertSame(2, $extraction->refresh()->found_count);
         $this->assertDatabaseCount('extraction_results', 2);

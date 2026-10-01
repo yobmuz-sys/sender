@@ -11,12 +11,13 @@ long-running daemons and root access are **not** required at any point.
 
 ## Current status
 
-> **Stage 3C — first extraction vertical slice**
-> Pasted text extraction is implemented end to end: persistence, bounded
-> database-queue processing, results, and CSV download. URL extraction, file
-> upload, other formats and SMTP campaign sending remain future work.
+> **Stage 3D — extraction operational hardening**
+> The pasted-text workload now runs the way it always claimed to: a bounded
+> `sender:work` worker on the database queue, durable run evidence, streaming
+> bounded-memory extraction, and paginated history and results. URL extraction,
+> file upload, other formats and SMTP campaign sending remain future work.
 
-Accepted baseline: `9b70bb8`. 261 tests / 721 assertions passing.
+Accepted baseline: `d2e56eb`. 304 tests / 848 assertions passing.
 
 Implemented and tested:
 
@@ -77,7 +78,16 @@ should be "fixed" by weakening a threshold or a check.
    billing and audit are rendered as explicit "not yet available" shells. They
    query no domain table, because no such table exists yet and inventing one
    would fabricate a dependency.
-8. **Settings are read-only in the browser.** There is no web editor for
+8. **Extraction is pasted text only.** TXT and CSV are accepted as *pasted*
+   content — the same single regex pass runs over whatever text is submitted.
+   There is no file upload and no dedicated CSV parser. Uploaded TXT/CSV files
+   are a later stage.
+9. **Background processing depends on cron.** `sender:work` runs from a cPanel
+   Cron entry. Without one, extractions are created and queued but never
+   processed, and the cron capability reports `UNKNOWN` with the fix attached.
+   The suite runs `QUEUE_CONNECTION=sync`, so request-level tests prove the
+   application path; `QueueWorkerTest` covers the database-queue path separately.
+10. **Settings are read-only in the browser.** There is no web editor for
    configuration. A form that rewrote it would persist into the next deploy,
    would have to reconcile `.env` against cached configuration, and would
    bypass the invariants checked at boot. Operators edit the environment and
@@ -182,15 +192,25 @@ A capability the platform has never measured reports `UNKNOWN`, which is not a
 failure. Today `url_fetch` is `UNKNOWN`, because no code exists yet to perform
 it. `smtp` is also `UNKNOWN` until an operator verifies it — see below.
 
-### Observing cron
+### Running the worker
 
-cPanel cannot tell PHP whether a cron entry exists, so the platform records
-durable evidence that the scheduler ran and infers the capability from it. Point
-a cPanel Cron Job at:
+The platform processes queued work from cron. Point a cPanel Cron Job at:
 
 ```
-*/5 * * * * cd /home/USER/sender && /usr/local/bin/php artisan sender:heartbeat >> /dev/null 2>&1
+*/5 * * * * cd /home/USER/sender && /usr/local/bin/php artisan sender:work >> /dev/null 2>&1
 ```
+
+`sender:work` drains the database queue within bounds and exits. It is not a
+daemon and must not be run in the foreground — on shared hosting a resident
+process is killed when the invocation ends and cannot be supervised. Each run is
+appended to `scheduled_runs` with its outcome — `running`, `succeeded` or
+`failed` — so a worker that starts failing is distinguishable from one that has
+stopped being called.
+
+`sender:heartbeat` still exists and records the same evidence, for installations
+that only want to probe the scheduler. It is no longer the primary signal: a
+cron entry that runs `sender:work` proves both that the scheduler fires *and*
+that the platform got something done.
 
 Each run is appended to `scheduled_runs` with its outcome — `running`,
 `succeeded` or `failed` — so a command that starts failing is distinguishable
@@ -301,7 +321,7 @@ unauthenticated caller enumerate the host.
 | `/dashboard` | Account overview |
 | `/account/profile` | Name, locale, time zone (PATCH) |
 | `/account/security` | Password change (PUT) |
-| `/extractor` | Extraction: create, history, detail, CSV download. Requires a confirmed address |
+| `/extractor` | Extraction: create, history, detail, CSV download. Requires a confirmed address and the worker |
 | `/files`, `/lists`, `/templates`, `/campaigns`, `/suppression`, `/analytics` | Product surfaces — staged shells, see the limitation above |
 
 ### Administration
