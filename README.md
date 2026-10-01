@@ -11,12 +11,13 @@ long-running daemons and root access are **not** required at any point.
 
 ## Current status
 
-> **Stage 3A — COMPLETE / VERIFIED**
-> Queue reservation safety, durable scheduled-run evidence, and real SMTP
-> capability verification established. No job engine, extractor, or campaign
-> sending has been implemented.
+> **Stage 3B — COMPLETE / VERIFIED**
+> The application surface and administration foundation: permission-aware
+> navigation, verified email, account management, user suspension, and a full
+> administrative surface over the Stage 3A evidence. No job engine, extractor,
+> or campaign sending has been implemented.
 
-Accepted baseline: `84f46eb`. 136 tests / 483 assertions passing.
+Accepted baseline: `6445a9c`. 253 tests / 702 assertions passing.
 
 Implemented and tested:
 
@@ -39,10 +40,18 @@ Implemented and tested:
 | Queue reservation invariant (`retry_after` vs worker runtime) | done |
 | Durable scheduled-run evidence, replacing the cache heartbeat | done |
 | SMTP verification and the capability it establishes | done |
+| Email verification required before any product or admin page | done |
+| Account profile, email change, password change, session regeneration | done |
+| User suspension with a last-super-administrator guard | done |
+| Declarative, permission-aware navigation derived from one source | done |
+| Route-derived breadcrumbs, shared shell, standard error pages | done |
+| Administration: dashboard, users, roles, jobs, runs, SMTP, system | done |
+| Honest staged pages for features, plans, campaigns, API, billing, audit | done |
+| Page-completeness and navigation-integrity test suite | done |
 
 ### Known intentional limitations
 
-These are accepted consequences of the Stage 3A scope, not defects. None of them
+These are accepted consequences of the Stage 3B scope, not defects. None of them
 should be "fixed" by weakening a threshold or a check.
 
 1. **`DEGRADED` on the developer machine.** Laragon's stock `php.ini` is below
@@ -65,11 +74,20 @@ should be "fixed" by weakening a threshold or a check.
 6. **Run evidence is a record of outcomes, not a progress model.** Runs are
    deliberately minimal: no chunking, progress or dependency graph. Those belong
    to the workload that needs them.
+7. **Placeholder pages carry no behaviour.** Features, plans, campaigns, API,
+   billing and audit are rendered as explicit "not yet available" shells. They
+   query no domain table, because no such table exists yet and inventing one
+   would fabricate a dependency.
+8. **Settings are read-only in the browser.** There is no web editor for
+   configuration. A form that rewrote it would persist into the next deploy,
+   would have to reconcile `.env` against cached configuration, and would
+   bypass the invariants checked at boot. Operators edit the environment and
+   confirm with `sender:diagnose`.
 
 **Not** implemented, and deliberately so at this stage: the email extractor,
 the web crawler, SMTP campaign sending, recipients, suppression, plans,
-entitlements, usage tracking, the admin operations centre, the REST API, PHP
-integration and billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
+entitlements, usage tracking, a working job queue beyond reservation safety,
+PHP integration and billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -264,18 +282,61 @@ npm run build   # production build, committed to public/build
 
 ## Endpoints
 
-| Path | Access | Purpose |
-| --- | --- | --- |
-| `/` | public | Landing page |
-| `/health` | public | JSON readiness verdict, no host detail |
-| `/up` | public | Laravel liveness probe |
-| `/register`, `/login`, `/forgot-password`, `/reset-password` | guest | Authentication |
-| `/dashboard` | authenticated | Account overview |
-| `/logout` | authenticated | End the session (POST) |
-| `/diagnostics` | `system.view` | Full host capability report |
+### Public
 
-`/diagnostics` additionally requires `SENDER_DIAGNOSTICS_ENABLED=true` in
-`.env`; it returns 404 otherwise.
+| Path | Purpose |
+| --- | --- |
+| `/` | Landing page |
+| `/health` | JSON readiness verdict — the aggregate status only, no host detail |
+| `/up` | Laravel liveness probe, answering without application code |
+| `/register`, `/login`, `/forgot-password`, `/reset-password/{token}` | Authentication |
+
+`/health` returns exactly `status` and `capability`. Anything more would let an
+unauthenticated caller enumerate the host.
+
+### Authenticated, email confirmed
+
+| Path | Purpose |
+| --- | --- |
+| `/email/verify`, `/email/verify/{id}/{hash}` | Address confirmation; `/email/verification-notification` resends (POST) |
+| `/dashboard` | Account overview |
+| `/account/profile` | Name, locale, time zone (PATCH) |
+| `/account/security` | Password change (PUT) |
+| `/extractor`, `/files`, `/lists`, `/templates`, `/campaigns`, `/suppression`, `/analytics` | Product surfaces — staged shells, see the limitation above |
+
+### Administration
+
+Each route requires its own permission; an account without it receives 403.
+
+| Path | Permission |
+| --- | --- |
+| `/admin` | `users.view` |
+| `/admin/users`, `/admin/users/create`, `/admin/users/{user}`, `/admin/users/{user}/edit` | `users.view` / `users.create` / `users.edit` |
+| `/admin/users/{user}/suspend`, `/reinstate` | `users.suspend` |
+| `/admin/roles` | `users.view` |
+| `/admin/features` | `features.view` |
+| `/admin/plans` | `plans.view` |
+| `/admin/campaigns` | `campaigns.view` |
+| `/admin/jobs`, `/admin/runs` | `jobs.view` |
+| `/admin/jobs/{run}/retry`, `/forget` | `jobs.manage` |
+| `/admin/smtp`, `/admin/smtp/verification` | `system.view` |
+| `/admin/smtp/verify`, `/admin/smtp/send` | `system.manage` |
+| `/admin/system`, `/admin/system/diagnostics` | `system.view` |
+| `/admin/system/subsystems`, `/{subsystem}/enable`, `/disable`, `/reset` | `system.manage` |
+| `/admin/settings` | `system.view` |
+| `/admin/api`, `/admin/billing`, `/admin/audit` | staged shells |
+
+`/admin/system/diagnostics` renders in both states. With
+`SENDER_DIAGNOSTICS_ENABLED=false` it explains what the page would show and
+where to act, rather than 404ing — a navigation link that fails by configuration
+is worse than one that states the condition.
+
+`/diagnostics` is retained as a redirect to `/admin/system/diagnostics` so
+existing bookmarks keep working.
+
+A suspended account is rejected at sign-in with the same generic
+`auth.failed` response as an invalid password, and is refused entry by
+middleware on any subsequent request.
 
 ---
 

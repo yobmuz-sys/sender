@@ -472,6 +472,14 @@ credentials, no environment values in production responses. On top of that:
 - `password`, `password_confirmation`, `current_password`, `smtp_password` and
   `api_secret` are excluded from exception flashing.
 - `APP_DEBUG=true` in production is reported as `UNAVAILABLE` by the inspector.
+- 403, 404, 419 and 500 have their own pages. They state what happened and what
+  to do next, and nothing else: no environment name, no exception class, no route
+  or file path.
+
+The **environment name was previously rendered in the footer of every page**. It
+is operational information, and a customer could read it by opening any
+authenticated page. It now appears only on the system overview, which requires
+`system.view`. The shell reports `app()->version()` instead.
 
 ## 11. Testing
 
@@ -483,11 +491,92 @@ Tests assert behaviour that matters for this platform: role resolution, the fact
 that registration cannot self-assign a role, login throttling, secret redaction,
 and that the health endpoint leaks nothing.
 
+`PageCompletenessTest` exists because a missing page fails silently. A template
+that no route renders, or a navigation entry pointing at a route that does not
+exist, compiles cleanly and the suite still passes; the only symptom is a person
+clicking a link and finding a dead page. It asserts that every declared page
+renders, that every page requires the authentication it should and refuses the
+permissions it should, that every navigation entry names a real route, and that
+placeholders state they are placeholders.
+
 ## 12. Deferred by design
 
 Not built yet, on purpose: the extractor, the crawler, SMTP campaign delivery,
 recipients and suppression, the job engine, plans, entitlements, usage
-tracking, the admin operations centre, the REST API, PHP integration and
-billing. Each depends on foundations that did not exist before this stage, and
-building them first would mean retrofitting quotas, authorization, locking and
-logging around code that had already been written.
+tracking, the REST API, PHP integration and billing. Each depends on foundations
+that did not exist before this stage, and building them first would mean
+retrofitting quotas, authorization, locking and logging around code that had
+already been written.
+
+---
+
+## 13. The application surface
+
+Added in Stage 3B. These are structural decisions, not descriptions of what the
+code happens to do.
+
+### Navigation is declared once and filtered by permission
+
+`AdminNavigation` and `ProductNavigation` list `NavigationItem` values. A view
+composer (`NavigationBuilder`) resolves them against the current account and
+shares the result with `components.layout`.
+
+The alternative — asking each view what to show — duplicates authorization in
+the presentation layer, where it drifts from the server's decision and produces
+links that lead to a 403. Here the link and the route's middleware read the same
+`Permission` constant, so they cannot disagree.
+
+Each navigation entry names a route; `PageCompletenessTest` asserts every one
+resolves. Adding an entry before its route is a test failure, not a 404 in
+production.
+
+### Breadcrumbs are derived, not declared
+
+`Breadcrumbs::for()` reads the route name and splits it into a trail
+(`admin.system.diagnostics` → Administration / System / <page title>). Declaring
+the trail per view would repeat the same prefix on thirty templates, and any of
+them could disagree with the actual route — which is the specific failure this
+avoids.
+
+### The environment is not a page variable
+
+`app()->environment()` is not passed to user-facing views. Only the system
+overview, behind `system.view`, reads it.
+
+### Configuration is not editable in a browser
+
+`/admin/settings` renders limits, queue reservation, host requirements and
+capability subjects as read-only facts. A web editor would have to reconcile
+`.env` against cached configuration, would persist into the next deployment if
+the process were interrupted, and would bypass every invariant checked at boot.
+Operators edit the environment and confirm with `sender:diagnose`.
+
+### Suspension fails the same way as a wrong password
+
+A suspended account is rejected at sign-in with the generic `auth.failed`
+response, and refused by middleware afterwards. A distinct message would confirm
+to an attacker that an address is registered.
+
+The last-super-administrator check lives in `SuperAdministratorGuard`, so every
+path that removes a privilege — suspension, demotion, role change — passes
+through one place. A controller-local check would be forgotten by the next
+controller.
+
+### Placeholders query nothing
+
+The staged pages render an explicit "not yet available" state and reference no
+domain table, because none exists. Inventing an empty `campaigns` table to hang a
+placeholder off would fabricate a dependency that a later stage would inherit as
+though it were real. `PageCompletenessTest` asserts those tables are absent.
+
+### One aggregate verdict, published consistently
+
+`/health` publishes `CapabilityRegistry::overall()`. The diagnostics page renders
+the same value.
+
+These were briefly two different calculations — `overall()` composes subject
+statuses and the required-capability rule, while `HostCapabilityReport::overall`
+summarises host checks alone. The page reported `UNKNOWN` while `/health`
+reported `DEGRADED`. The existing test missed it because it asserted the string
+"Degraded" was absent from a page where "Unknown" appeared in per-subject badges.
+It now asserts equality.

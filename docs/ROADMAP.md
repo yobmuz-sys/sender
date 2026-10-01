@@ -7,23 +7,26 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
-> **Stage 3A — COMPLETE / VERIFIED**
-> Queue reservation safety, durable scheduled-run evidence, and real SMTP
-> capability verification established. No job engine, extractor, or campaign
-> sending has been implemented.
+> **Stage 3B — COMPLETE / VERIFIED**
+> The application surface and administration foundation: permission-aware
+> navigation, verified email, account management, user suspension, and a full
+> administrative surface over the Stage 3A evidence. No job engine, extractor,
+> or campaign sending has been implemented.
 
-**Stage 3A complete. The Stage 3 job engine itself has not started.**
+**Stage 3A and 3B complete. The Stage 3 job engine itself has not started.**
 
-Accepted baseline: `84f46eb`. 136 tests / 483 assertions passing.
+Accepted baseline: `6445a9c`. 253 tests / 702 assertions passing.
 
 The known limitations recorded in `README.md` (a `DEGRADED` developer machine, an
-empty `SENDER_REQUIRED_CAPABILITIES`, no production entitlement consumer, and an
-unverified `smtp` capability) are accepted consequences of the current scope.
-They are not defects, and Stage 3 must not be scoped to eliminate them — in
-particular, Stage 3 must not depend on making a local host `READY`.
+empty `SENDER_REQUIRED_CAPABILITIES`, no production entitlement consumer, an
+unverified `smtp` capability, and placeholder-only product pages) are accepted
+consequences of the current scope. They are not defects, and Stage 3 must not be
+scoped to eliminate them — in particular, Stage 3 must not depend on making a
+local host `READY`.
 
-The Stage 2 limitation that the cron heartbeat was cache-backed is now resolved;
-see "Stage 3A delivered" below.
+Two earlier limitations are now resolved: the cron heartbeat was cache-backed
+(durable since Stage 3A), and Stage 2 had no administrator beyond a single
+diagnostics page (Stage 3B adds the full administrative surface).
 
 ## Stages
 
@@ -32,10 +35,10 @@ see "Stage 3A delivered" below.
 | 0 | Foundation / architecture | complete |
 | 1 | Laravel application foundation | complete |
 | 2 | Capability, availability and deployment control foundation | complete |
-| 3 | Job and cron processing engine | 3A complete; engine not started |
+| 3 | Job and cron processing engine | 3A and 3B complete; engine not started |
 | 4 | Email extraction engine | pending |
 | 5 | SMTP campaign engine | pending |
-| 6 | Admin operations centre | pending |
+| 6 | Admin operations centre | 3B foundation in place; operational workloads pending |
 | 7 | REST API and PHP integration | pending |
 | 8 | Billing | pending |
 | 9 | Security, performance, deployment hardening | pending |
@@ -164,3 +167,74 @@ of, before committing to a workload:
 No job engine, workload, extractor or campaign sending was built. The next
 decision is which real workload the engine should run first; that choice should
 be made against a re-audit, not against this document.
+
+---
+
+## What Stage 3B delivered
+
+Stage 3B is the application surface: everything a person uses to operate the
+platform, and the evidence the earlier stages produce made visible. It was
+scoped to the surface, and deliberately stopped short of any workload.
+
+- **Navigation.** A single declarative source per audience
+  (`AdminNavigation`, `ProductNavigation`), rendered by a view composer and
+  filtered by `Permission`. Views never re-implement authorization, so a link
+  cannot appear that the server would refuse.
+- **Breadcrumbs.** Derived from the route name rather than declared per view.
+  Thirty hand-written trails would repeat the same prefix and any of them could
+  disagree with the actual route.
+- **Email verification.** `MustVerifyEmail` on the account, enforced by
+  middleware across every product and admin route. Changing the address clears
+  the confirmation and resends the link.
+- **Account management.** Profile, email and password. A password change
+  regenerates the session id so a token minted before the change cannot survive
+  it.
+- **User suspension.** A `UserStatus` column and middleware. A suspended account
+  is refused at sign-in with the same generic `auth.failed` as an invalid
+  password, so suspension is not distinguishable from a wrong password.
+- **Last-super-administrator protection.** In `SuperAdministratorGuard`, not in a
+  controller, so every path that removes a privilege passes through one check.
+- **Administration.** Dashboard, users, roles, jobs, runs, SMTP, system,
+  subsystems and settings — all reading the Stage 3A registries. Settings are
+  read-only; there is deliberately no configuration editor.
+- **Staged shells.** Features, plans, campaigns, API, billing, audit and the
+  product pages render an explicit "not yet available" state and query no table,
+  because no such table exists and inventing one would fabricate a dependency.
+- **Standard error pages.** 403, 404, 419 and 500, with no environment name,
+  stack trace or route internals.
+
+The **environment name was previously rendered in the footer of every page**,
+where any customer could read it. It is now available only on the system
+overview, behind `system.view`.
+
+**What this re-audit found and fixed**
+
+These were real defects in already-accepted Stage 3A code, surfaced by building
+the surface on top of it:
+
+- `/health` published `DEGRADED` while the diagnostics page reported `UNKNOWN`.
+  The two used different calculations. The page now renders the registry's
+  aggregate, and the test asserts equality rather than string presence — it had
+  been passing because "Unknown" appeared elsewhere in the page.
+- `.env.example` documented a `SENDER_`-prefixed retry window, but the platform
+  reads `DB_QUEUE_RETRY_AFTER`. Operators had no documented way to satisfy the
+  reservation invariant. The suite asserts every `docs/*.md` file names only the
+  variable the configuration actually reads.
+- The dashboard rendered `app()->environment()` in the body.
+- Product input ceilings were far above the worker budget: `max_urls_per_request`
+  at 1000 could not be processed inside 240s, and `max_text_input_bytes` at 10M
+  was not plausibly processable at all. Reduced to 100 and 1 MiB, tied to the
+  worker runtime rather than chosen independently.
+- `Password::defaults()->min` is protected in Laravel 12; the security page read
+  it and every render of that page was a 500.
+- The staged-page shell bound its record parameter positionally, so every
+  record route 404'd.
+- The settings page iterated a nested configuration tree and passed arrays where
+  the template expected scalars.
+
+**Still not started:** the job engine, the extractor, campaign sending,
+recipients, suppression, plans, usage tracking, the REST API and billing.
+
+Stage 3C should be scoped to one real workload, chosen deliberately, rather than
+to the general-purpose engine — the engine has no stable shape until something
+is asked of it.
