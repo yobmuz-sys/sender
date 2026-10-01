@@ -141,7 +141,7 @@ final class HostCapabilityInspector implements HostInspector
             $this->environment->maxUploadBytes,
             $requiredUpload,
             DeploymentLimit::MaxUploadBytes->humanValue(),
-            ['Raise upload_max_filesize/post_max_size, or lower the SENDER_LIMIT_MAX_UPLOAD_BYTES limit.'],
+            ['Raise upload_max_filesize/post_max_size, or lower the SENDER_DEPLOYMENT_LIMIT_MAX_UPLOAD_BYTES limit.'],
         );
 
         $checks[] = $this->compare(
