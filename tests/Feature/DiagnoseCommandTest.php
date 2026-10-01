@@ -11,6 +11,7 @@ use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\Enums\CapabilitySubject;
 use App\Domain\System\HostCapabilityReport;
 use App\Domain\System\Mail\SmtpCapability;
+use App\Domain\System\Network\UrlFetchCapability;
 use App\Domain\System\Runs\RunObserver;
 use Tests\TestCase;
 
@@ -109,6 +110,7 @@ class DiagnoseCommandTest extends TestCase
                 $app->make(HostInspector::class),
                 $app->make(RunObserver::class),
                 $app->make(SmtpCapability::class),
+                $app->make(UrlFetchCapability::class),
             ),
         );
     }

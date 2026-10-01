@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Domain\Extraction\Extractor;
+use App\Domain\Extraction\Url\SecureUrlFetcher;
 use App\Domain\Users\Enums\Role;
 use App\Jobs\ProcessExtractionJob;
 use App\Models\Extraction;
@@ -79,8 +80,8 @@ class ExtractionWorkflowTest extends TestCase
 
         // Run the same work twice. Results are keyed on (extraction_id, email)
         // with a unique constraint, so a retry converges rather than duplicating.
-        (new ProcessExtractionJob($extraction->id))->handle($extractor);
-        (new ProcessExtractionJob($extraction->id))->handle($extractor);
+        (new ProcessExtractionJob($extraction->id))->handle($extractor, SecureUrlFetcher::make());
+        (new ProcessExtractionJob($extraction->id))->handle($extractor, SecureUrlFetcher::make());
 
         $this->assertSame(2, $extraction->refresh()->found_count);
         $this->assertDatabaseCount('extraction_results', 2);

@@ -10,6 +10,7 @@ use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\Enums\CapabilitySubject;
 use App\Domain\System\HostCapabilityReport;
 use App\Domain\System\Mail\SmtpCapability;
+use App\Domain\System\Network\UrlFetchCapability;
 use App\Domain\System\Runs\RunObserver;
 
 /**
@@ -32,6 +33,7 @@ final class CapabilityRegistry
         private readonly HostInspector $inspector,
         private readonly RunObserver $runs,
         private readonly SmtpCapability $smtp,
+        private readonly UrlFetchCapability $urlFetch,
     ) {}
 
     /**
@@ -43,6 +45,7 @@ final class CapabilityRegistry
             ...$this->inspector->inspect()->checks,
             $this->runs->check(),
             $this->smtp->check(),
+            $this->urlFetch->check(),
         ]);
     }
 

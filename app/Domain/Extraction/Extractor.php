@@ -28,8 +28,13 @@ use App\Models\Extraction;
  * unique(extraction_id, email). Re-running the job over the same content
  * converges on the same rows instead of duplicating them, which is what makes a
  * worker retry safe.
+ *
+ * Not final: the job takes one as a parameter, so a test can substitute one
+ * that fails and observe how the job records a retryable failure. The
+ * alternative — forcing a real extraction to throw — would test the failure
+ * path only by breaking something unrelated.
  */
-final class Extractor
+class Extractor
 {
     /**
      * Matches address-shaped text.
@@ -59,11 +64,17 @@ final class Extractor
     /**
      * Process an extraction, writing results as it goes.
      *
+     * The source is injected rather than assumed. Pasted text arrives from the
+     * database and a URL arrives as a temporary file, and the extraction
+     * algorithm is the same in both cases — it must not know which, or the
+     * fetch would end up entangled with the pattern matching.
+     *
+     * @param  ExtractionSource|null  $source  Defaults to the stored content.
      * @return array{processed: int, found: int}
      */
-    public function extract(Extraction $extraction): array
+    public function extract(Extraction $extraction, ?ExtractionSource $source = null): array
     {
-        $source = new DatabaseExtractionSource((string) ($extraction->content ?? ''));
+        $source ??= new DatabaseExtractionSource((string) ($extraction->content ?? ''));
 
         $batch = [];
         $found = [];

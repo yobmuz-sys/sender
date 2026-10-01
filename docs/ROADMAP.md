@@ -7,14 +7,21 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
-> **Stage 3D — extraction operational hardening**
-> The pasted-text workload now runs the way it always claimed to: a bounded
-> `sender:work` worker on the database queue, durable run evidence, streaming
-> bounded-memory extraction, and paginated history and results. URL extraction,
-> file upload, other formats and SMTP campaign sending remain future work.
+> **Stage 3E — secure single-URL extraction**
+> Pasted text and one URL per extraction, both on the bounded `sender:work`
+> worker. URL fetching is treated as a network-security workload, not a form
+> field: scheme, port, DNS and global-routability checks, pinning against DNS
+> rebinding, per-hop redirect validation, streaming with a 2 MiB ceiling, and a
+> capability that stays `UNKNOWN` until `sender:verify-url` measures it.
+>
+> **Stage 3D.1** corrected four semantic defects found in the Stage 3D audit:
+> `--max-jobs` could raise the configured ceiling; the recorded job count came
+> from queue depth rather than job events; `sender:heartbeat` could still
+> produce a `READY` cron verdict; and a retryable extraction failure briefly
+> presented as terminal.
 
-**Stage 3A-3D complete. The first workload runs in production; a general-purpose
-job engine still does not exist.**
+**Stage 3A-3E complete. Two source types run in production; a general-purpose job
+engine still does not exist.**
 
 Accepted baseline: `d2e56eb`. 304 tests / 848 assertions passing.
 
@@ -341,6 +348,65 @@ is submitted. There is still no file upload and no dedicated CSV parser. The
 documentation says exactly that rather than claiming CSV support the code does
 not have.
 
-**Still deferred:** URL extraction, file upload, XLSX, DOCX, PDF, XML, MX and
-DNS validation, SMTP campaign delivery, recipients, suppression, billing and the
-REST API.
+**Still deferred:** multi-URL extraction, file upload, XLSX, DOCX, PDF, XML, MX
+and DNS validation, SMTP campaign delivery, recipients, suppression, billing and
+the REST API.
+
+## What Stage 3E delivered
+
+Stage 3D proved pasted text could be processed safely on a bounded worker. Stage
+3E adds the second source type, and treats it as what it is: an instruction from
+a third party for the server to make an outbound request.
+
+```text
+one URL
+  -> SecureUrlFetcher
+     -> scheme, credentials, port, length   (no network touched)
+     -> DNS resolution, every address checked for global routability
+     -> the validated address pinned via CURLOPT_RESOLVE
+     -> bounded HTTP (5s connect, 10s total)
+     -> 3xx handled by hand, each hop revalidated from scratch
+     -> streamed to a temporary file, aborted past 2 MiB
+     -> content type must be text
+  -> FileExtractionSource
+  -> the existing Extractor, unchanged and unaware of HTTP
+```
+
+The controls that matter, and why each exists:
+
+- **Global routability, not a private-range blacklist.** A blacklist has to be
+  complete; every forgotten range is a hole. `FILTER_FLAG_GLOBAL_RANGE` asks the
+  positive question, so an address space PHP has not heard of is refused.
+- **Every resolved address, not the first.** A host resolving to one public and
+  one private address would leave the choice to whoever answers next — and the
+  answer can differ between the check and the connection.
+- **Pinning.** Resolving, checking and then requesting the hostname normally
+  defeats both checks above, because the socket resolves the name again.
+- **Redirects by hand.** A safe first response must not launder an unsafe second
+  one, and a client following internally would reuse the previous hop's pinned
+  address.
+- **A byte ceiling enforced during the transfer.** Checking afterwards bounds
+  nothing; a server that keeps sending fills the disk before any check runs.
+- **Text only.** This extracts addresses from pages; it is not a downloader.
+
+A refused URL records a *category* (`blocked_destination`, `http_error`,
+`unsupported_content_type`, …), never a libcurl message — those describe this
+network, not the user's request, and the record outlives the deployment. A
+refusal is terminal rather than retried, because the same URL will be refused
+identically forever.
+
+**One URL per extraction.** `max_urls_per_request` remains 100 at the
+installation level, but nothing implements or advertises it: one request is one
+URL, one extraction, one bounded job. Whether many URLs become many jobs or one
+job is a Stage 3F decision, deliberately not pre-empted here.
+
+**Still deferred:** multi-URL extraction, file upload, XLSX, DOCX, PDF, XML, MX
+and DNS validation of extracted addresses, SMTP campaign delivery, recipients,
+suppression, billing and the REST API.
+
+## Next: Stage 3F — multi-URL workload architecture
+
+The open question is shape, not code: does one extraction with many URLs become
+many bounded jobs, or one job per extraction? The single-URL slice supplies the
+measurements that decide it — per-fetch time, retry rates, and how much of the
+worker's runtime a single page consumes.

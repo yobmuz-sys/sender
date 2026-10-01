@@ -28,8 +28,13 @@ abstract class TestCase extends BaseTestCase
     /**
      * Record one successful scheduled run, so tests that need cron to be
      * healthy do not each have to know how that evidence is stored.
+     *
+     * Defaults to the worker rather than the heartbeat: the cron verdict is
+     * derived from `sender:work` alone, so a test that records only a
+     * heartbeat would be asserting against a signal the platform no longer
+     * treats as proof.
      */
-    protected function recordRun(string $command = 'sender:heartbeat'): void
+    protected function recordRun(string $command = 'sender:work'): void
     {
         $recorder = app(RunRecorder::class);
 

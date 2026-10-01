@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Domain\Extraction\ExtractionSource;
 use App\Domain\Extraction\ExtractionStatus;
 use App\Domain\Extraction\Extractor;
+use App\Domain\Extraction\Url\SecureUrlFetcher;
 use App\Jobs\ProcessExtractionJob;
 use App\Models\Extraction;
 use App\Models\User;
@@ -40,7 +42,7 @@ class ExtractionStateTest extends TestCase
             'content' => "alpha@example.com\nbeta@example.com\n",
         ]);
 
-        (new ProcessExtractionJob($extraction->id))->handle(Extractor::fromConfiguration());
+        (new ProcessExtractionJob($extraction->id))->handle(Extractor::fromConfiguration(), SecureUrlFetcher::make());
 
         $extraction->refresh();
 
@@ -52,6 +54,67 @@ class ExtractionStateTest extends TestCase
         $this->assertSame(2, $extraction->processed_count);
     }
 
+    public function test_a_retryable_failure_is_not_exposed_as_a_terminal_state(): void
+    {
+        $extraction = Extraction::factory()->create([
+            'status' => ExtractionStatus::Pending->value,
+            'content' => 'alpha@example.com',
+        ]);
+
+        // A real job, doing real work, through an extractor that fails. The job
+        // itself is not overridden, so its catch block is what is exercised.
+        try {
+            (new ProcessExtractionJob($extraction->id))->handle(new class(65536, 250) extends Extractor
+            {
+                public function extract(Extraction $extraction, ?ExtractionSource $source = null): array
+                {
+                    throw new RuntimeException('transient failure');
+                }
+            }, SecureUrlFetcher::make());
+
+            $this->fail('the exception should propagate to the queue');
+        } catch (RuntimeException) {
+            // Expected: the queue's retry handling owns what happens next.
+        }
+
+        $extraction->refresh();
+
+        // The queue will retry. Marking this `failed` would show a customer a
+        // terminal-looking dead extraction while the system was still working
+        // on it, and the next attempt would flip it back to `processing`.
+        $this->assertNotSame(
+            ExtractionStatus::Failed,
+            $extraction->status,
+            'a retryable failure must not present as terminal',
+        );
+
+        $this->assertFalse($extraction->status->isTerminal());
+        $this->assertStringContainsString('transient failure', (string) $extraction->error);
+    }
+
+    public function test_a_retryable_failure_leaves_no_completion_timestamp(): void
+    {
+        $extraction = Extraction::factory()->create([
+            'status' => ExtractionStatus::Pending->value,
+            'content' => 'alpha@example.com',
+        ]);
+
+        try {
+            (new ProcessExtractionJob($extraction->id))->handle(new class(65536, 250) extends Extractor
+            {
+                public function extract(Extraction $extraction, ?ExtractionSource $source = null): array
+                {
+                    throw new RuntimeException('transient');
+                }
+            }, SecureUrlFetcher::make());
+        } catch (RuntimeException) {
+            // Expected.
+        }
+
+        // completed_at means "finished". An in-flight retry has not finished.
+        $this->assertNull($extraction->refresh()->completed_at);
+    }
+
     public function test_a_throwing_job_records_a_failure_rather_than_claiming_success(): void
     {
         $extraction = Extraction::factory()->create([
@@ -59,22 +122,25 @@ class ExtractionStateTest extends TestCase
             'content' => 'alpha@example.com',
         ]);
 
-        $job = new class($extraction->id) extends ProcessExtractionJob
-        {
-            public function handle(Extractor $extractor): void
-            {
-                throw new RuntimeException('worker exploded');
-            }
-        };
+        $job = new ProcessExtractionJob($extraction->id);
 
+        // A real job, failing through its real catch block, with only the
+        // extractor substituted so that it throws.
         try {
-            $job->handle(Extractor::fromConfiguration());
+            $job->handle(new class(65536, 250) extends Extractor
+            {
+                public function extract(Extraction $extraction, ?ExtractionSource $source = null): array
+                {
+                    throw new RuntimeException('worker exploded');
+                }
+            }, SecureUrlFetcher::make());
+
             $this->fail('the exception should have propagated to the queue');
         } catch (RuntimeException) {
             // Expected: the queue's retry handling owns what happens next.
         }
 
-        // The queue's final-failure hook is what a customer sees.
+        // The queue's final-failure hook is what a customer eventually sees.
         $job->failed(new RuntimeException('worker exploded'));
 
         $extraction->refresh();

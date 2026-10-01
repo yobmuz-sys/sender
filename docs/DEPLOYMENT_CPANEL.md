@@ -247,8 +247,23 @@ from `sender:heartbeat` to `sender:work`. A cron entry that is still being
 invoked but keeps failing — a queue pointing at a table that does not exist, for
 instance — is a different problem from an entry that has stopped being invoked,
 and they have opposite remedies. A heartbeat could only ever answer the second
-question. `sender:heartbeat` remains available and its runs still count as
-evidence, it is simply not the primary signal.
+question.
+
+`sender:heartbeat` remains available for installations that only want to probe
+the scheduler, but as of Stage 3D.1 it is **history, not proof**: the cron
+capability verdict comes from `sender:work` alone. An installation that never
+migrated and keeps running only the heartbeat therefore reports `UNKNOWN` — which
+is correct, because its queue is never drained.
+
+The counts recorded on each run come from the queue's own job events, not from
+queue depth. Depth arithmetic cannot be right: jobs dispatched during the run
+inflate the figure, and a retried job leaves the queue without having succeeded.
+
+`sender:work --max-jobs=N` and `--max-runtime=N` may only tighten the configured
+ceilings. A larger value is clamped and warned about; a value below 1 is refused.
+Do not add flags to the cron line to make it run longer — the bounds exist
+because a shared host kills overrunning processes, and a longer worker does not
+fix a slow queue, it hides it.
 
 The worker is bounded and exits. Each invocation processes at most
 `SENDER_QUEUE_MAX_JOBS_PER_RUN` jobs (default 25) and stops after
@@ -360,3 +375,59 @@ than a missing cache.
 | Login loop | Sessions cannot persist | Confirm `sessions` table exists and the `database` session driver is set |
 | Styles missing | `public/build` missing or stale | Confirm `public/build/manifest.json` exists |
 | Jobs never run | No worker | Expected at this stage; the job engine arrives in Stage 3 |
+
+---
+
+## URL fetching on shared hosting
+
+Stage 3E adds one outbound HTTP workload. On shared hosting it is the most
+likely thing to be silently blocked, and the failure is worth understanding.
+
+### Verify before offering the feature
+
+```bash
+php artisan sender:verify-url
+```
+
+Until this has been run, `url_fetch` reports `UNKNOWN`. That is not a bug and
+should not be worked around: the capability reports what was measured, and
+nothing has been measured. The command performs one real fetch through the same
+hardened fetcher the feature uses, so a pass means something and a failure is
+diagnosable.
+
+If it reports `UNAVAILABLE`, outbound access is being blocked or DNS is not
+working. Check with your host. Do not "fix" it by disabling the address checks.
+
+### What the platform will never fetch
+
+The address checks are security controls, not tuning. These are refused whatever
+the operator asks for:
+
+- `file:`, `ftp:`, `gopher:`, `data:`, `javascript:` and every scheme but http/https
+- URLs containing a username or password
+- any port but 80 and 443
+- destinations that are not globally routable: loopback, RFC1918, link-local
+  (including `169.254.169.254`), carrier-grade NAT, reserved blocks, multicast,
+  and non-global IPv6
+
+A redirect is revalidated in full, so a public URL cannot redirect the platform
+into any of the above. If an extraction fails with `blocked_destination`, that is
+the policy working. If you genuinely need an internal page extracted, it needs a
+different, deliberate mechanism — not a relaxed check.
+
+### Temporary files and disk
+
+Response bodies are streamed to the system temporary directory and removed as
+soon as extraction finishes, including on failure. On a host with a small
+`/tmp` quota, set `SENDER_URL_MAX_RESPONSE_BYTES` lower than the space available;
+the default 2 MiB is small, but a queue of extractions can be in flight at once.
+The directory is writable only if PHP can write to it — verify with
+`sender:diagnose` if extractions fail with an unexpected category.
+
+### Timeouts
+
+`SENDER_URL_CONNECT_TIMEOUT_SECONDS` (default 5) and
+`SENDER_URL_REQUEST_TIMEOUT_SECONDS` (default 10) sit comfortably below the
+worker runtime. Do not raise the worker runtime to accommodate slow sites: the
+reservation invariant depends on a job finishing inside its `retry_after`, and a
+longer worker does not make a slow host faster.

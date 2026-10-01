@@ -27,8 +27,24 @@
             still working on it.
         </x-alert>
     @elseif ($extraction->status === \App\Domain\Extraction\ExtractionStatus::Failed)
+        {{-- A URL failure stores a category, not a transport message. Rendering
+             the category verbatim would show a user "unsupported_scheme", which
+             describes the platform's internals rather than telling them
+             anything. The label is the sentence a person can act on; the raw
+             category stays in the record for anyone diagnosing it. --}}
+        @php
+            $failureCategory = $extraction->source_type === 'url'
+                ? \App\Domain\Extraction\Url\UrlFailureReason::tryFrom((string) $extraction->error)
+                : null;
+        @endphp
         <x-alert variant="danger" title="This extraction failed" class="mb-6">
-            {{ $extraction->error ?: 'The background worker could not finish this extraction.' }}
+            {{ $failureCategory?->label()
+                ?? ($extraction->error ?: 'The background worker could not finish this extraction.') }}
+
+            @if ($failureCategory)
+                <p class="mt-1 font-mono text-xs text-red-700">{{ $failureCategory->value }}</p>
+            @endif
+
             {{-- The raw exception is never shown; see ProcessExtractionJob::failed(). --}}
             @if ($extraction->found_count > 0)
                 Any addresses found before the failure are listed below.
@@ -43,6 +59,20 @@
                     <dt class="text-slate-600">Status</dt>
                     <dd><x-status-badge :status="$extraction->status->value" :label="$extraction->status->label()" /></dd>
                 </div>
+                <div class="flex justify-between gap-3">
+                    <dt class="text-slate-600">Source</dt>
+                    <dd class="font-mono text-slate-800">{{ $extraction->source_type === 'url' ? 'URL' : 'Pasted text' }}</dd>
+                </div>
+
+                {{-- Shown only for a URL extraction. The reference is stored
+                     without its query string, so it cannot leak a token. --}}
+                @if ($extraction->source_type === 'url' && $extraction->source_ref)
+                    <div class="flex flex-col gap-1">
+                        <dt class="text-slate-600">Address</dt>
+                        <dd class="break-all font-mono text-xs text-slate-800">{{ $extraction->source_ref }}</dd>
+                    </div>
+                @endif
+
                 <div class="flex justify-between gap-3">
                     <dt class="text-slate-600">Found</dt>
                     <dd class="font-mono text-slate-800">{{ number_format($extraction->found_count) }}</dd>

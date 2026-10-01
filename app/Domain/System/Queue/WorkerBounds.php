@@ -36,17 +36,39 @@ final readonly class WorkerBounds
     public static function resolve(?int $maxRuntimeOverride = null, ?int $maxJobsOverride = null): self
     {
         $maxRuntime = DeploymentLimit::MaxWorkerRuntimeSeconds->value();
+        $maxJobs = (int) config('sender.capabilities.queue.max_jobs_per_run', 25);
         $retryAfter = (int) config('queue.connections.'.config('queue.default').'.retry_after', 0);
 
         return new self(
             // An override may only ever tighten the ceiling, never raise it.
-            // Raising it past the reservation window would defeat the invariant.
-            maxRuntimeSeconds: $maxRuntimeOverride !== null ? min($maxRuntimeOverride, $maxRuntime) : $maxRuntime,
-            maxJobs: $maxJobsOverride ?? (int) config('sender.capabilities.queue.max_jobs_per_run', 25),
+            // Raising the runtime past the reservation window would defeat the
+            // invariant; raising the batch size would let one cron entry run
+            // far longer than the operator configured for.
+            maxRuntimeSeconds: self::clamp($maxRuntimeOverride, $maxRuntime),
+            maxJobs: self::clamp($maxJobsOverride, $maxJobs),
             maxAttempts: DeploymentLimit::MaxJobAttempts->value(),
             retryAfterSeconds: $retryAfter,
             reservationMarginSeconds: (int) config('sender.capabilities.queue.reservation_margin_seconds'),
         );
+    }
+
+    /**
+     * Constrain an operator-supplied ceiling to at least 1 and at most the
+     * configured value.
+     *
+     * A non-positive request is not honoured as zero: `--max-jobs=0` would be
+     * passed straight to the worker and is not a meaningful thing to ask for.
+     * The command reports the rejection rather than silently substituting a
+     * number, because a cron entry quietly doing something other than what it
+     * says is worse than one that refuses.
+     */
+    private static function clamp(?int $requested, int $ceiling): int
+    {
+        if ($requested === null) {
+            return $ceiling;
+        }
+
+        return max(1, min($requested, $ceiling));
     }
 
     /**

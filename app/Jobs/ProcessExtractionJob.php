@@ -4,8 +4,14 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Domain\Extraction\DatabaseExtractionSource;
+use App\Domain\Extraction\ExtractionSource;
 use App\Domain\Extraction\ExtractionStatus;
 use App\Domain\Extraction\Extractor;
+use App\Domain\Extraction\FileExtractionSource;
+use App\Domain\Extraction\Url\FetchedResource;
+use App\Domain\Extraction\Url\SecureUrlFetcher;
+use App\Domain\Extraction\Url\UrlFetchException;
 use App\Domain\System\Queue\WorkerBounds;
 use App\Models\Extraction;
 use App\Support\SensitiveData;
@@ -60,7 +66,7 @@ class ProcessExtractionJob implements ShouldQueue
         $this->tries = $bounds->maxAttempts;
     }
 
-    public function handle(Extractor $extractor): void
+    public function handle(Extractor $extractor, SecureUrlFetcher $fetcher): void
     {
         $extraction = Extraction::query()->find($this->extractionId);
 
@@ -78,19 +84,46 @@ class ProcessExtractionJob implements ShouldQueue
             'error' => null,
         ])->save();
 
+        // The temporary file is owned by this method. `finally` rather than the
+        // success path alone, because a fetch that fails halfway through still
+        // leaves a file behind, and one leaked per attempt would accumulate
+        // across every retry of every job.
+        $resource = null;
+        $source = null;
+
         try {
-            $counts = $extractor->extract($extraction);
-        } catch (Throwable $exception) {
+            $source = $this->sourceFor($extraction, $fetcher, $resource);
+
+            $counts = $extractor->extract($extraction, $source);
+        } catch (UrlFetchException $exception) {
+            // A refused URL is not a transient fault and not an extraction
+            // failure worth retrying: the same URL will be refused identically
+            // every time. Recording the category — rather than a transport
+            // message, which describes this network rather than the user's
+            // request — and marking it terminal here is what stops a
+            // permanently invalid URL from cycling through the queue.
             $extraction->forceFill([
                 'status' => ExtractionStatus::Failed->value,
                 'completed_at' => now(),
-                // Reduced to something safe to persist and to show. Error text
-                // routinely quotes configuration, and this column outlives the
-                // request that wrote it.
-                'error' => mb_substr(SensitiveData::redactText($exception->getMessage()), 0, 500),
+                'error' => $exception->reason->value,
             ])->save();
 
+            // Not rethrown: there is no retry that could succeed, and a job that
+            // always fails would eventually land in failed_jobs as noise.
+            return;
+        } catch (Throwable $exception) {
+            $extraction->forceFill([
+                'status' => ExtractionStatus::Processing->value,
+                'error' => $this->safeMessage($exception),
+            ])->save();
+
+            // Rethrown so the queue's own retry handling decides what happens
+            // next. The status is deliberately left non-terminal: Laravel will
+            // try again, and writing `failed` here would show a customer a
+            // dead extraction while the system was still working on it.
             throw $exception;
+        } finally {
+            $resource?->remove();
         }
 
         $extraction->forceFill([
@@ -103,12 +136,39 @@ class ProcessExtractionJob implements ShouldQueue
     }
 
     /**
+     * Where the bytes for this extraction come from.
+     *
+     * Pasted text is already in the database. A URL is not: it is fetched here,
+     * on the worker, under the full network policy — never during the request,
+     * where the caller would be waiting on a third party.
+     *
+     * @param  FetchedResource|null  $resource  Receives the fetched file so the
+     *                                          caller can remove it afterwards.
+     */
+    private function sourceFor(
+        Extraction $extraction,
+        SecureUrlFetcher $fetcher,
+        ?FetchedResource &$resource,
+    ): ExtractionSource {
+        if ($extraction->source_type === 'url') {
+            $resource = $fetcher->fetch((string) $extraction->source_ref);
+
+            return new FileExtractionSource($resource->path);
+        }
+
+        return new DatabaseExtractionSource((string) ($extraction->content ?? ''));
+    }
+
+    /**
      * Called by the queue once the final attempt has failed.
      *
-     * Records the outcome on the extraction itself so a customer can see it,
-     * independently of the queue's own failed_jobs table. The raw exception
-     * is not stored: `failed()` also receives it, and it can carry a traceback
-     * with configuration values in it.
+     * This is the only place `failed` is written. `failed()` is invoked by the
+     * queue only when attempts are exhausted, so the transition is genuinely
+     * terminal rather than a prediction.
+     *
+     * The raw exception is not stored: it can carry a traceback with
+     * configuration values in it, and this column outlives the deployment that
+     * wrote it.
      */
     public function failed(Throwable $exception): void
     {
@@ -117,8 +177,16 @@ class ProcessExtractionJob implements ShouldQueue
             ->update([
                 'status' => ExtractionStatus::Failed->value,
                 'completed_at' => now(),
-                'error' => mb_substr(SensitiveData::redactText($exception->getMessage()), 0, 500),
+                'error' => $this->safeMessage($exception),
             ]);
+    }
+
+    /**
+     * A failure message reduced to something safe to persist and to show.
+     */
+    private function safeMessage(Throwable $exception): string
+    {
+        return mb_substr(SensitiveData::redactText($exception->getMessage()), 0, 500);
     }
 
     /**

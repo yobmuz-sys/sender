@@ -9,6 +9,7 @@ use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\Enums\CapabilitySubject;
 use App\Domain\System\Mail\SmtpCapability;
+use App\Domain\System\Network\UrlFetchCapability;
 use App\Domain\System\Runs\RunObserver;
 use App\Domain\System\Runs\RunRecorder;
 use App\Domain\System\Runs\ScheduledRun;
@@ -34,29 +35,52 @@ class CronCapabilityTest extends TestCase
         );
     }
 
-    public function test_the_heartbeat_command_moves_cron_to_ready(): void
+    public function test_a_worker_run_moves_cron_to_ready(): void
     {
-        $this->artisan('sender:heartbeat')->assertSuccessful();
+        config()->set('queue.default', 'database');
 
-        $this->assertNotNull(app(RunRecorder::class)->latest('sender:heartbeat'));
+        $this->artisan('sender:work')->assertSuccessful();
+
+        $this->assertNotNull(app(RunRecorder::class)->latest('sender:work'));
 
         $this->assertSame(CapabilityStatus::Ready, $this->cronStatus());
     }
 
+    public function test_the_heartbeat_alone_does_not_establish_the_cron_capability(): void
+    {
+        // A deployment that never migrated still runs the heartbeat, and its
+        // queue is never drained. Reporting that as a healthy scheduler is the
+        // exact state Stage 3D exists to surface, so a heartbeat run must not
+        // be able to produce a READY verdict.
+        $this->artisan('sender:heartbeat')->assertSuccessful();
+
+        $this->assertNotNull(app(RunRecorder::class)->latest('sender:heartbeat'));
+
+        $this->assertNotSame(
+            CapabilityStatus::Ready,
+            $this->cronStatus(),
+            'the heartbeat is history, not proof that scheduled work is happening',
+        );
+    }
+
     public function test_repeated_runs_are_recorded_individually(): void
     {
-        $this->artisan('sender:heartbeat')->assertSuccessful();
-        $this->artisan('sender:heartbeat')->assertSuccessful();
-        $this->artisan('sender:heartbeat')->assertSuccessful();
+        config()->set('queue.default', 'database');
+
+        $this->artisan('sender:work')->assertSuccessful();
+        $this->artisan('sender:work')->assertSuccessful();
+        $this->artisan('sender:work')->assertSuccessful();
 
         // Each execution is evidence in its own right, which a single
         // overwritten timestamp could never be.
-        $this->assertSame(3, ScheduledRun::query()->where('command', 'sender:heartbeat')->count());
+        $this->assertSame(3, ScheduledRun::query()->where('command', 'sender:work')->count());
     }
 
     public function test_a_stale_run_degrades_rather_than_failing(): void
     {
-        $this->artisan('sender:heartbeat')->assertSuccessful();
+        config()->set('queue.default', 'database');
+
+        $this->artisan('sender:work')->assertSuccessful();
 
         $this->travel(2)->hours();
 
@@ -66,7 +90,7 @@ class CronCapabilityTest extends TestCase
     public function test_a_failing_run_degrades_and_explains_itself(): void
     {
         $recorder = app(RunRecorder::class);
-        $run = $recorder->start('sender:heartbeat');
+        $run = $recorder->start('sender:work');
         $recorder->fail($run, 'connection refused by mail.example.com:587');
 
         $check = app(RunObserver::class)->check();
@@ -81,9 +105,9 @@ class CronCapabilityTest extends TestCase
         // attempts as liveness would make a broken deployment look healthy
         // exactly when somebody is trying to diagnose it.
         $recorder = app(RunRecorder::class);
-        $recorder->fail($recorder->start('sender:heartbeat'), 'boom');
+        $recorder->fail($recorder->start('sender:work'), 'boom');
 
-        $this->assertFalse($recorder->isFresh('sender:heartbeat'));
+        $this->assertFalse($recorder->isFresh('sender:work'));
         $this->assertNotSame(CapabilityStatus::Ready, $this->cronStatus());
     }
 
@@ -94,7 +118,7 @@ class CronCapabilityTest extends TestCase
         $this->assertSame(CapabilityStatus::Unknown, $observer->check()->capability);
 
         $recorder = app(RunRecorder::class);
-        $recorder->succeed($recorder->start('sender:heartbeat'));
+        $recorder->succeed($recorder->start('sender:work'));
 
         $this->assertSame(CapabilityStatus::Ready, $observer->check()->capability);
     }
@@ -112,6 +136,7 @@ class CronCapabilityTest extends TestCase
             app(HostInspector::class),
             app(RunObserver::class),
             app(SmtpCapability::class),
+            app(UrlFetchCapability::class),
         ))->status(CapabilitySubject::Cron);
     }
 }

@@ -501,13 +501,13 @@ placeholders state they are placeholders.
 
 ## 12. Deferred by design
 
-Not built yet, on purpose: URL extraction, the crawler, file upload, XLSX/DOCX/
-PDF/XML parsing, MX and DNS validation, SMTP campaign delivery, recipients and
-suppression, a general-purpose job engine, plans, entitlements, usage tracking,
-the REST API, PHP integration and billing. Each depends on foundations that did
-not exist before this stage, and building them first would mean retrofitting
-quotas, authorization, locking and logging around code that had already been
-written.
+Not built yet, on purpose: multi-URL extraction, file upload, XLSX/DOCX/PDF/XML
+parsing, MX and DNS validation of extracted addresses, SMTP campaign delivery,
+recipients and suppression, a general-purpose job engine, plans, entitlements,
+usage tracking, the REST API, PHP integration and billing. Each depends on
+foundations that did not exist before this stage, and building them first would
+mean retrofitting quotas, authorization, locking and logging around code that had
+already been written.
 
 ---
 
@@ -525,11 +525,11 @@ the retry path — tripling a large payload for no benefit.
 
 ### The form offers only what works
 
-The controller accepts `source_type` of `paste` alone. URL and file upload were
-offered in the form and accepted by validation while doing nothing, so a
-submission was stored, reported as an extraction, and never processed. An option
-the platform cannot honour is a claim, not a placeholder — placeholders say they
-are placeholders.
+The controller accepts `source_type` of `paste` or `url`. File upload was offered
+in the form and accepted by validation while doing nothing, so a submission was
+stored, reported as an extraction, and never processed. An option the platform
+cannot honour is a claim, not a placeholder — placeholders say they are
+placeholders. Stage 3E added `url` only once the path behind it existed.
 
 ### Another account's extraction is a 404, not a 403
 
@@ -727,3 +727,100 @@ summarises host checks alone. The page reported `UNKNOWN` while `/health`
 reported `DEGRADED`. The existing test missed it because it asserted the string
 "Degraded" was absent from a page where "Unknown" appeared in per-subject badges.
 It now asserts equality.
+
+---
+
+## 17. Outbound URL fetching
+
+Stage 3E. The second source type, and the first place the platform acts on an
+instruction from a third party.
+
+### The problem is positional, not syntactic
+
+A URL that passed every check on its face is still dangerous, because the
+application is a server with a network position the requester does not have. The
+value of asking *this* server to fetch `http://10.0.0.5/admin` is that it can
+reach it and the requester cannot. So the policy is about destinations, and it
+is enforced by a dedicated collaborator rather than inside the controller.
+
+### Global routability, asked positively
+
+`IpPolicy::isGloballyRoutable()` combines `FILTER_FLAG_GLOBAL_RANGE` with
+`NO_PRIV_RANGE` and `NO_RES_RANGE`, then excludes unspecified, multicast and
+IPv4-mapped forms explicitly. The alternative — listing the private ranges to
+avoid — is wrong on its own terms: a blacklist must be complete, and every range
+someone forgets is a hole. Asking the positive question means an address space
+this runtime has not heard of is refused rather than permitted.
+
+Loopback and link-local matter most: `169.254.169.254` is the cloud metadata
+endpoint, and a fetch that returns it hands credentials to whoever asked.
+
+### Every address, not the first
+
+`DnsResolver` refuses the whole host if *any* resolved address is not globally
+routable. Accepting a host with one public and one private answer would leave the
+choice to whoever replies — and the reply can differ between the check and the
+connection that follows it.
+
+### Pinning, or the check is theatre
+
+The validated address is bound to the connection with `CURLOPT_RESOLVE`, so
+libcurl does not resolve the name again when it opens the socket. Resolving,
+checking, and then making an ordinary hostname request defeats everything above:
+an attacker who controls DNS answers the check with a public address and the
+connection with a loopback one. The original hostname is still used for the Host
+header and TLS SNI, so certificates validate as normal.
+
+### Redirects are followed by hand
+
+Automatic following is disabled. Each `Location` is parsed, revalidated for
+scheme, credentials and port, then resolved and address-checked again on the next
+iteration, up to a configurable three hops. Two things follow: a safe first
+response cannot launder an unsafe second one, and a client that followed
+internally would reuse the previous hop's pinned address for a host nobody
+validated on that connection.
+
+A `Location` carrying *any* scheme is passed to the validator untouched.
+Treating `file:///etc/passwd` as a relative path would rewrite it into an
+ordinary https URL on the current host and follow it.
+
+### The ceiling holds during the transfer
+
+Responses are streamed to a temporary file, and a libcurl progress callback
+aborts the transfer past the configured 2 MiB. Checking the finished size bounds
+nothing: a server that keeps sending fills the disk before any check runs.
+Truncating to fit would be worse still, because the results would look complete.
+
+`Content-Length` is honoured when it is present, purely to avoid downloading a
+body already known to be too large. A server's claim is only a claim, which is
+why the in-transfer check is the real control.
+
+The temporary file is removed in a `finally` on every path. One leaked per fetch
+would accumulate across every retry of every job on a host nobody cleans by hand.
+
+### The extraction algorithm stays ignorant of HTTP
+
+`FileExtractionSource` reads the temporary file a chunk at a time and hands
+chunks to the existing `Extractor`. The same algorithm serves pasted text and
+fetched pages; nothing about DNS, redirects or content types reaches it. That is
+the point of `ExtractionSource` existing.
+
+### Failure is a category, not a message
+
+`UrlFailureReason` is what a customer sees: `blocked_destination`,
+`http_error`, `unsupported_content_type`. A libcurl message would describe this
+network — resolved addresses, refused ports, proxy details — none of which helps
+the user and all of which outlive the deployment.
+
+A refusal is recorded as terminal and is not retried, because the same URL will
+be refused identically every time. Other failures throw, and the queue's own
+retry handling decides.
+
+### The capability is measured, not assumed
+
+`url_fetch` reports `UNKNOWN` until `sender:verify-url` performs one real fetch
+through this same fetcher. Reporting READY because the cURL extension is loaded
+would be a capability that can be wrong. A target refused *by policy* is reported
+as not established rather than unavailable — that outcome proves the policy
+works, not that the network is broken, and conflating the two sends an operator
+to the wrong place.

@@ -11,13 +11,15 @@ long-running daemons and root access are **not** required at any point.
 
 ## Current status
 
-> **Stage 3D — extraction operational hardening**
-> The pasted-text workload now runs the way it always claimed to: a bounded
-> `sender:work` worker on the database queue, durable run evidence, streaming
-> bounded-memory extraction, and paginated history and results. URL extraction,
-> file upload, other formats and SMTP campaign sending remain future work.
+> **Stage 3E — secure single-URL extraction**
+> Pasted-text extraction runs on a bounded `sender:work` worker over the database
+> queue. One URL per extraction can now be fetched safely: scheme, port, DNS and
+> address checks, pinning against DNS rebinding, per-hop redirect validation,
+> streaming with a byte ceiling, and a capability that stays `UNKNOWN` until
+> `sender:verify-url` actually measures it. Multi-URL extraction, file upload,
+> other document formats and SMTP campaign sending remain future work.
 
-Accepted baseline: `d2e56eb`. 304 tests / 848 assertions passing.
+Accepted baseline: `bec48f2`. 387 tests / 1075 assertions passing.
 
 Implemented and tested:
 
@@ -78,10 +80,14 @@ should be "fixed" by weakening a threshold or a check.
    billing and audit are rendered as explicit "not yet available" shells. They
    query no domain table, because no such table exists yet and inventing one
    would fabricate a dependency.
-8. **Extraction is pasted text only.** TXT and CSV are accepted as *pasted*
-   content — the same single regex pass runs over whatever text is submitted.
-   There is no file upload and no dedicated CSV parser. Uploaded TXT/CSV files
-   are a later stage.
+8. **One URL per extraction, and no query string.** `source_type` is `paste` or
+   `url`; a URL extraction fetches exactly one address. `source_ref` is stored
+   without its query string, because it is both what the worker fetches and
+   text an operator and the owner can read — and queries routinely carry tokens.
+   The consequence is deliberate and visible: the request is made against the
+   path alone, so a site that varies on its query string will return different
+   content than the address the user saw. TXT and CSV are accepted as *pasted*
+   content; there is no file upload and no dedicated CSV parser.
 9. **Background processing depends on cron.** `sender:work` runs from a cPanel
    Cron entry. Without one, extractions are created and queued but never
    processed, and the cron capability reports `UNKNOWN` with the fix attached.
@@ -93,10 +99,10 @@ should be "fixed" by weakening a threshold or a check.
    bypass the invariants checked at boot. Operators edit the environment and
    confirm with `sender:diagnose`.
 
-**Not** implemented, and deliberately so at this stage: URL extraction, the web
-crawler, XLSX/DOCX/PDF/XML parsing, MX and DNS validation, SMTP campaign sending,
-recipients, suppression, plans, entitlements, usage tracking, PHP integration and
-billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
+**Not** implemented, and deliberately so at this stage: multi-URL extraction,
+file upload, XLSX/DOCX/PDF/XML parsing, MX and DNS validation of extracted
+addresses, SMTP campaign sending, recipients, suppression, plans, entitlements,
+usage tracking, PHP integration and billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -189,8 +195,32 @@ headroom, and a check that fails on it would be a check operators learn to
 ignore.
 
 A capability the platform has never measured reports `UNKNOWN`, which is not a
-failure. Today `url_fetch` is `UNKNOWN`, because no code exists yet to perform
-it. `smtp` is also `UNKNOWN` until an operator verifies it — see below.
+failure. `url_fetch` is `UNKNOWN` until an operator runs `sender:verify-url` —
+not because cURL is missing, but because its presence says nothing about whether
+the network permits the connection. `smtp` is likewise `UNKNOWN` until
+`sender:verify-smtp` — see below.
+
+### Verifying URL fetching
+
+```bash
+php artisan sender:verify-url
+```
+
+The command performs one real fetch through the same hardened
+`SecureUrlFetcher` the extraction feature uses, and records what it proved. It
+does not report READY because the cURL extension is loaded: a verification that
+proves nothing would be worse than no verification, because the capability would
+then be able to be wrong.
+
+To test a path this host cannot otherwise reach:
+
+```bash
+php artisan sender:verify-url --url=https://example.org/contact
+```
+
+A target refused by network policy (a private address, an unsupported port) is
+reported as *not established* rather than *unavailable* — that outcome proves the
+policy works, not that the network is broken.
 
 ### Running the worker
 
@@ -207,10 +237,22 @@ appended to `scheduled_runs` with its outcome — `running`, `succeeded` or
 `failed` — so a worker that starts failing is distinguishable from one that has
 stopped being called.
 
+The counts on that record come from the queue's own job events, not from queue
+depth. Subtracting depth before and after cannot be right: jobs dispatched
+*during* the run inflate the figure, and a job that fails and is retried leaves
+the queue without ever having succeeded. Both numbers are durable operational
+evidence, so a wrong one is a wrong answer to "did the platform do its work".
+
+`sender:work --max-jobs=N` and `--max-runtime=N` may only *tighten* the
+configured ceilings; a value above the configured maximum is clamped and
+reported, and a value below 1 is refused rather than quietly replaced. A cron
+entry that does something other than it says is worse than one that declines.
+
 `sender:heartbeat` still exists and records the same evidence, for installations
-that only want to probe the scheduler. It is no longer the primary signal: a
-cron entry that runs `sender:work` proves both that the scheduler fires *and*
-that the platform got something done.
+that only want to probe the scheduler. It is history, not proof: the cron
+capability verdict comes from `sender:work` alone, so a deployment still running
+only the heartbeat reports `UNKNOWN` rather than a healthy scheduler whose queue
+is never drained.
 
 Each run is appended to `scheduled_runs` with its outcome — `running`,
 `succeeded` or `failed` — so a command that starts failing is distinguishable

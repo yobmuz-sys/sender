@@ -80,6 +80,16 @@ return [
             // How long a recorded verification is treated as current.
             'fresh_after_seconds' => (int) env('SENDER_SMTP_FRESH_AFTER_SECONDS', 86400),
         ],
+
+        'url_fetch' => [
+            // How long a recorded verification is treated as current.
+            'fresh_after_seconds' => (int) env('SENDER_URL_FETCH_FRESH_AFTER_SECONDS', 86400),
+
+            // Where `sender:verify-url` fetches when given no --url. A public
+            // text page with no query string, so nothing secret is ever
+            // requested or recorded.
+            'verification_url' => (string) env('SENDER_URL_VERIFICATION_URL', 'https://example.com/'),
+        ],
     ],
 
     /*
@@ -123,6 +133,56 @@ return [
         // Rows written per batch. Uses the shared deployment limit rather than
         // a value of its own.
         'batch_size' => (int) env('SENDER_DEPLOYMENT_LIMIT_MAX_JOB_BATCH_SIZE', 250),
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
+    | Outbound URL fetching
+    |---------------------------------------------------------------------------
+    |
+    | Network policy for the URL extraction workload. These are security
+    | boundaries as much as they are limits: each one removes a way to turn the
+    | platform into something that reaches places it should not.
+    |
+    | The timeouts are deliberately far below the worker runtime. A fetch that
+    | could occupy the whole worker budget would make the queue's reservation
+    | invariant impossible to keep, so the correct response to slow hosts is a
+    | shorter HTTP timeout — never a longer worker.
+    */
+    'url_fetch' => [
+        // Longest URL accepted, checked before parsing so a hostile string
+        // cannot make the parser work hard first.
+        'max_url_length' => (int) env('SENDER_URL_MAX_LENGTH', 2048),
+
+        // Connection establishment. Short, because a host that cannot be
+        // reached on the port is not going to become reachable by waiting.
+        'connect_timeout_seconds' => (int) env('SENDER_URL_CONNECT_TIMEOUT_SECONDS', 5),
+
+        // Whole request, including reading the body.
+        'request_timeout_seconds' => (int) env('SENDER_URL_REQUEST_TIMEOUT_SECONDS', 10),
+
+        // Redirect hops followed. Each hop is re-validated from scratch, so
+        // this is a limit on work rather than a security control.
+        'max_redirects' => (int) env('SENDER_URL_MAX_REDIRECTS', 3),
+
+        // Bytes read from a response body before the fetch is abandoned. The
+        // body is streamed to a temporary file, so this bounds disk rather than
+        // memory.
+        'max_response_bytes' => (int) env('SENDER_URL_MAX_RESPONSE_BYTES', 2 * 1024 * 1024),
+
+        // Content types the extraction will read. Everything else is refused
+        // without being read: this workload extracts addresses from text and is
+        // not a general file downloader.
+        'allowed_content_types' => [
+            'text/html',
+            'application/xhtml+xml',
+            'text/plain',
+        ],
+
+        // Ports that may be connected to. Restricting to the two web ports
+        // prevents the platform being used to probe internal services on
+        // arbitrary ports.
+        'allowed_ports' => [80, 443],
     ],
 
     /*

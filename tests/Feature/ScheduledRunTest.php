@@ -108,7 +108,7 @@ class ScheduledRunTest extends TestCase
 
         // The evidence is durable. An earlier design kept this in the cache, so
         // `cache:clear` silently reset cron to UNKNOWN.
-        $this->assertTrue(app(RunRecorder::class)->isFresh('sender:heartbeat'));
+        $this->assertTrue(app(RunRecorder::class)->isFresh('sender:work'));
     }
 
     public function test_freshness_requires_a_recent_success(): void

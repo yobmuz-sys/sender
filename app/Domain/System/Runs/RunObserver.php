@@ -30,14 +30,14 @@ final class RunObserver
      *
      * This was `sender:heartbeat`, which existed only because nothing else ran
      * from cron. Now that `sender:work` does the platform's real work, it is
-     * the better evidence: a cron entry that succeeds proves both that the
+     * the authoritative signal: a cron entry that succeeds proves both that the
      * scheduler fires *and* that the platform got something done, whereas the
-     * heartbeat only proved the first. A deployment with `sender:work` failing
-     * every night because the queue is misconfigured would otherwise be
-     * reported as a healthy scheduler.
+     * heartbeat only proved the first.
      *
-     * `sender:heartbeat` is retained for installations that still call it; its
-     * evidence is not ignored, it simply is not the primary signal.
+     * This matters most for an installation that never migrated. A deployment
+     * still calling only the heartbeat would otherwise be reported as having a
+     * healthy scheduler while its queue is never drained, which is the exact
+     * state Stage 3D was built to detect.
      */
     public function probeCommand(): string
     {
@@ -45,36 +45,27 @@ final class RunObserver
     }
 
     /**
-     * Every command whose runs count as scheduler evidence, most preferred
-     * first.
+     * Every command whose runs are shown in the run history.
+     *
+     * Wider than `probeCommand()` on purpose. The capability *verdict* comes
+     * from the worker alone, but history should not hide a deployment's own
+     * records just because they are now legacy.
      *
      * @return list<string>
      */
     public function probeCommands(): array
     {
-        return ['sender:work', 'sender:heartbeat'];
+        return ['sender:work', 'sender:verify-url', 'sender:heartbeat'];
     }
 
     /**
-     * The most recent run across every probe command.
+     * The most recent run of the authoritative probe command.
+     *
+     * Deliberately does not consider the other commands. See `probeCommand()`.
      */
     public function latestProbeRun(): ?ScheduledRun
     {
-        $latest = null;
-
-        foreach ($this->probeCommands() as $command) {
-            $run = $this->runs->latest($command);
-
-            if ($run === null) {
-                continue;
-            }
-
-            if ($latest === null || $run->started_at->greaterThan($latest->started_at)) {
-                $latest = $run;
-            }
-        }
-
-        return $latest;
+        return $this->runs->latest($this->probeCommand());
     }
 
     /**

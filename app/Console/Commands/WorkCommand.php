@@ -6,11 +6,15 @@ namespace App\Console\Commands;
 
 use App\Domain\System\Enums\Subsystem;
 use App\Domain\System\Flags\SubsystemFlagRegistry;
+use App\Domain\System\Queue\RunCounters;
 use App\Domain\System\Queue\WorkerBounds;
 use App\Domain\System\Runs\RecordsScheduledRun;
 use App\Domain\System\Runs\RunRecorder;
 use Illuminate\Console\Command;
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 
@@ -72,10 +76,40 @@ class WorkCommand extends Command
             return self::FAILURE;
         }
 
-        $bounds = WorkerBounds::resolve(
-            maxRuntimeOverride: $this->option('max-runtime') !== null ? (int) $this->option('max-runtime') : null,
-            maxJobsOverride: $this->option('max-jobs') !== null ? (int) $this->option('max-jobs') : null,
-        );
+        $maxRuntime = $this->option('max-runtime') !== null ? (int) $this->option('max-runtime') : null;
+        $maxJobs = $this->option('max-jobs') !== null ? (int) $this->option('max-jobs') : null;
+
+        // A non-positive request is refused rather than quietly replaced with
+        // something else. A cron entry that does not do what it says is worse
+        // than one that declines to run.
+        foreach (['--max-jobs' => $maxJobs, '--max-runtime' => $maxRuntime] as $option => $value) {
+            if ($value !== null && $value < 1) {
+                $this->error($option.' must be at least 1.');
+
+                return self::FAILURE;
+            }
+        }
+
+        $bounds = WorkerBounds::resolve(maxRuntimeOverride: $maxRuntime, maxJobsOverride: $maxJobs);
+
+        // An override above the configured ceiling is clamped. Tell the
+        // operator, because silently doing less than they asked for is its own
+        // kind of surprise.
+        if ($maxJobs !== null && $maxJobs > $bounds->maxJobs) {
+            $this->warn(sprintf(
+                '--max-jobs=%d exceeds the configured ceiling; using %d.',
+                $maxJobs,
+                $bounds->maxJobs,
+            ));
+        }
+
+        if ($maxRuntime !== null && $maxRuntime > $bounds->maxRuntimeSeconds) {
+            $this->warn(sprintf(
+                '--max-runtime=%d exceeds the configured ceiling; using %ds.',
+                $maxRuntime,
+                $bounds->maxRuntimeSeconds,
+            ));
+        }
 
         // Refusing to start is the point. Starting anyway would let a job be
         // handed to a second worker while this one still holds it, and the same
@@ -89,9 +123,19 @@ class WorkCommand extends Command
 
         $this->recordRun($recorder);
 
-        $queuedBefore = $this->countRows('jobs');
-
         try {
+            // Counted from the queue's own lifecycle events rather than by
+            // subtracting queue depth before and after.
+            //
+            // Depth arithmetic cannot be right: jobs dispatched *during* the run
+            // inflate the "after" figure, and a job that fails and is retried
+            // leaves the queue without ever having succeeded. Either way the
+            // number recorded as durable operational evidence would be wrong,
+            // and this record is what an operator reads when asking whether the
+            // platform did its work.
+            $counter = new RunCounters;
+            $this->observeRun($counter);
+
             $exit = $this->call('queue:work', [
                 '--stop-when-empty' => true,
                 '--max-time' => $bounds->maxRuntimeSeconds,
@@ -107,28 +151,46 @@ class WorkCommand extends Command
         }
 
         $queuedAfter = $this->countRows('jobs');
-        $processed = max(0, $queuedBefore - $queuedAfter);
-        $failed = $this->countRows('failed_jobs');
 
         if ($exit !== self::SUCCESS) {
-            $this->failRunWith('queue:work exited with status '.$exit, $processed, $failed);
+            $this->failRunWith('queue:work exited with status '.$exit, $counter->processed, $counter->failed);
 
             $this->error('The worker stopped with status '.$exit.'.');
 
             return self::FAILURE;
         }
 
-        $this->completeRun($processed, $failed);
+        $this->completeRun($counter->processed, $counter->failed);
 
         $this->info(sprintf(
-            'Processed %d job(s) within %ds and %d job attempt(s); %d still queued.',
-            $processed,
+            'Completed %d job(s) and gave up on %d within %ds and %d job(s); %d still queued.',
+            $counter->processed,
+            $counter->failed,
             $bounds->maxRuntimeSeconds,
             $bounds->maxJobs,
             $queuedAfter,
         ));
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Observe the queue's own job events for the duration of this run.
+     *
+     * `JobProcessed` fires once per job that completes. `JobFailed` fires only
+     * when a job has exhausted its attempts and is moved to the failed table —
+     * which is why it, and not the per-attempt exception event, is the honest
+     * measure of work given up on.
+     */
+    private function observeRun(RunCounters $counter): void
+    {
+        Event::listen(JobProcessed::class, static function () use ($counter): void {
+            $counter->processed++;
+        });
+
+        Event::listen(JobFailed::class, static function () use ($counter): void {
+            $counter->failed++;
+        });
     }
 
     /**

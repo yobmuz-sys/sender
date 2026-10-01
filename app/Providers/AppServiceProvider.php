@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Domain\Extraction\Extractor;
+use App\Domain\Extraction\Url\SecureUrlFetcher;
 use App\Domain\System\Capabilities\CapabilityRegistry;
 use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Entitlements\DenyAllEntitlement;
 use App\Domain\System\Entitlements\Entitlement;
 use App\Domain\System\Mail\SmtpCapability;
+use App\Domain\System\Network\UrlFetchCapability;
 use App\Domain\System\Runs\RunObserver;
 use App\Domain\System\Services\HostCapabilityInspector;
 use App\Domain\Users\Permission;
@@ -35,6 +37,15 @@ class AppServiceProvider extends ServiceProvider
         // integers the container cannot supply.
         $this->app->singleton(Extractor::class, static fn (): Extractor => Extractor::fromConfiguration());
 
+        // Bound rather than autowired: UrlValidator's constructor takes
+        // configuration values the container cannot infer, and the fetcher must
+        // be the *same* instance everywhere so the capability check and the
+        // extraction path cannot drift onto different network policies.
+        $this->app->singleton(
+            SecureUrlFetcher::class,
+            static fn (): SecureUrlFetcher => SecureUrlFetcher::make(),
+        );
+
         // Capability state is memoised for the life of the request so the
         // report is measured once and every consumer agrees on the answer.
         $this->app->scoped(
@@ -43,6 +54,7 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(HostInspector::class),
                 $app->make(RunObserver::class),
                 $app->make(SmtpCapability::class),
+                $app->make(UrlFetchCapability::class),
             ),
         );
     }

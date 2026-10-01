@@ -171,6 +171,43 @@ class QueueWorkerTest extends TestCase
         $this->assertDatabaseMissing('scheduled_runs', ['command' => 'sender:work']);
     }
 
+    public function test_a_job_count_override_cannot_raise_the_configured_ceiling(): void
+    {
+        // The runtime override was clamped but the job-count override was not,
+        // so `--max-jobs=10000` raised a ceiling configured at 25. That
+        // contradicted the documented rule that overrides may only tighten.
+        config()->set('sender.capabilities.queue.max_jobs_per_run', 25);
+
+        $this->assertSame(25, WorkerBounds::resolve(maxJobsOverride: 10_000)->maxJobs);
+        $this->assertSame(25, WorkerBounds::resolve()->maxJobs);
+        $this->assertSame(5, WorkerBounds::resolve(maxJobsOverride: 5)->maxJobs);
+    }
+
+    public function test_the_worker_rejects_an_override_that_is_asked_to_raise_the_ceiling(): void
+    {
+        config()->set('sender.capabilities.queue.max_jobs_per_run', 5);
+
+        $this->artisan('sender:work', ['--max-jobs' => 10_000])
+            ->expectsOutputToContain('exceeds the configured ceiling')
+            ->assertSuccessful();
+
+        // Reported, but still bounded.
+        $this->assertSame(5, WorkerBounds::resolve(maxJobsOverride: 10_000)->maxJobs);
+    }
+
+    public function test_a_zero_or_negative_override_is_refused_rather_than_clamped(): void
+    {
+        // Silently substituting a number for a nonsensical request is worse than
+        // declining: a cron entry that does not do what it says is a trap.
+        foreach ([0, -1, -100] as $invalid) {
+            $this->artisan('sender:work', ['--max-jobs' => $invalid])
+                ->expectsOutputToContain('must be at least 1')
+                ->assertFailed();
+        }
+
+        $this->assertDatabaseMissing('scheduled_runs', ['command' => 'sender:work']);
+    }
+
     public function test_the_job_timeout_stays_below_the_reservation_window(): void
     {
         $bounds = WorkerBounds::resolve();
@@ -187,6 +224,86 @@ class QueueWorkerTest extends TestCase
 
         $this->assertSame($bounds->jobTimeoutSeconds(), $job->timeout);
         $this->assertSame($bounds->maxAttempts, $job->tries);
+    }
+
+    public function test_the_recorded_processed_count_is_the_number_of_jobs_that_actually_completed(): void
+    {
+        $extraction = Extraction::factory()->create([
+            'user_id' => User::factory()->create()->id,
+            'status' => 'pending',
+            'content' => 'someone@example.com',
+        ]);
+
+        // Three jobs queued up front...
+        for ($i = 0; $i < 3; $i++) {
+            ProcessExtractionJob::dispatch($extraction->id);
+        }
+
+        $this->assertSame(3, DB::table('jobs')->count());
+
+        $this->artisan('sender:work')->assertSuccessful();
+
+        $run = app(RunRecorder::class)->latest('sender:work');
+
+        // Depth arithmetic would have produced this number too, so the
+        // interesting assertion is the second one.
+        $this->assertSame(3, $run->processed_count);
+        $this->assertSame(0, $run->failed_count);
+    }
+
+    public function test_the_recorded_count_is_not_derived_from_queue_depth(): void
+    {
+        // The defect: subtracting depth before and after. A job dispatched
+        // during the run inflates the "after" figure, so the count is wrong.
+        // Here three jobs run while two more are added, so depth arithmetic
+        // would report 1 for a run that processed 3.
+        config()->set('sender.capabilities.queue.max_jobs_per_run', 3);
+
+        $extraction = Extraction::factory()->create([
+            'user_id' => User::factory()->create()->id,
+            'status' => 'pending',
+            'content' => 'someone@example.com',
+        ]);
+
+        for ($i = 0; $i < 3; $i++) {
+            ProcessExtractionJob::dispatch($extraction->id);
+        }
+
+        // Dispatched while the queue is non-empty, which is exactly the
+        // condition that makes before/after arithmetic undercount.
+        ProcessExtractionJob::dispatch($extraction->id);
+        ProcessExtractionJob::dispatch($extraction->id);
+
+        $this->artisan('sender:work')->assertSuccessful();
+
+        $run = app(RunRecorder::class)->latest('sender:work');
+
+        $this->assertSame(
+            3,
+            $run->processed_count,
+            'the count must reflect completed jobs, not the change in queue depth',
+        );
+    }
+
+    public function test_a_job_that_exhausts_its_attempts_is_counted_as_failed(): void
+    {
+        $extraction = Extraction::factory()->create([
+            'user_id' => User::factory()->create()->id,
+            'status' => 'pending',
+            'content' => 'someone@example.com',
+        ]);
+
+        // A job whose handler always throws cannot succeed within its attempt
+        // limit, so the worker must give up on it and say so.
+        Fakes\FailingExtractionJob::dispatch($extraction->id);
+
+        $this->artisan('sender:work')->assertSuccessful();
+
+        $run = app(RunRecorder::class)->latest('sender:work');
+
+        $this->assertSame(0, $run->processed_count);
+        $this->assertGreaterThan(0, $run->failed_count);
+        $this->assertGreaterThan(0, DB::table('failed_jobs')->count());
     }
 
     public function test_a_worker_runtime_override_can_only_tighten_the_ceiling(): void

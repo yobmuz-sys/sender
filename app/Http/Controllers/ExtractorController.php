@@ -61,21 +61,41 @@ class ExtractorController extends Controller
     public function store(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            // Only pasted content is implemented. 'url' and 'file' are not
-            // accepted, because accepting them would store a request the
-            // platform cannot act on and then report it as an extraction.
-            'source_type' => ['required', 'string', 'in:paste'],
+            // Pasted content and a single URL. File upload and multiple URLs are
+            // not implemented, so they are not accepted: a submission the
+            // platform cannot act on is a claim, not a placeholder.
+            'source_type' => ['required', 'string', 'in:paste,url'],
 
             // A byte ceiling from the deployment limits, measured with strlen
             // rather than counted in characters. Rejects before dispatch, so
             // oversized input never reaches the queue or the database.
-            'content' => ['required', 'string', WithinByteCeiling::forTextInput()],
+            'content' => ['nullable', 'string', WithinByteCeiling::forTextInput()],
+
+            // Checked for presence rather than shape: the shape is the fetcher's
+            // policy, and duplicating it here would create a second set of rules
+            // to keep in step. What validation contributes is refusing an
+            // implausible length before the row is written.
+            'url' => ['nullable', 'string', 'max:'.(int) config('sender.url_fetch.max_url_length', 2048)],
         ]);
+
+        $isUrl = $validated['source_type'] === 'url';
 
         $extraction = Extraction::query()->create([
             'user_id' => $request->user()->id,
             'source_type' => $validated['source_type'],
-            'content' => $validated['content'],
+
+            // Pasted text is persisted so the worker can read it back; a URL is
+            // not, because the page it points at is fetched later and must not
+            // be stored.
+            'content' => $isUrl ? null : (string) ($validated['content'] ?? ''),
+
+            // The reference is stored without its query string, because that is
+            // what an operator and a customer both see and queries routinely
+            // carry tokens and addresses.
+            'source_ref' => $isUrl
+                ? $this->safeReference((string) ($validated['url'] ?? ''))
+                : null,
+
             'status' => ExtractionStatus::Pending->value,
             'found_count' => 0,
             'processed_count' => 0,
@@ -84,10 +104,20 @@ class ExtractorController extends Controller
 
         // Only the identifier crosses the queue boundary; the worker reads the
         // content back. A large paste therefore does not inflate the queued
-        // payload.
+        // payload, and no page body ever reaches the queue either.
         ProcessExtractionJob::dispatch($extraction->id);
 
         return redirect()->route('extractor.show', $extraction);
+    }
+
+    /**
+     * The URL as it will be shown and stored, without its query string.
+     */
+    private function safeReference(string $url): string
+    {
+        return str_contains($url, '?')
+            ? substr($url, 0, (int) strpos($url, '?'))
+            : $url;
     }
 
     public function history(Request $request): View
