@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Middleware\EnsureAccountIsActive;
+use Illuminate\Auth\Middleware\EnsureEmailIsVerified;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -13,7 +15,17 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        //
+        // Applied after authentication, so every signed-in route is covered by
+        // construction rather than by remembering to add it.
+        $middleware->web(append: [
+            EnsureAccountIsActive::class,
+        ]);
+
+        $middleware->alias([
+            // Declared once so a route can require confirmation without
+            // hard-coding framework middleware names.
+            'confirmed' => EnsureEmailIsVerified::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         // These values must never be echoed back into a form after a failed

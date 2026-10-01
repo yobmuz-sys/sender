@@ -12,8 +12,10 @@ use App\Domain\System\Mail\SmtpCapability;
 use App\Domain\System\Runs\RunObserver;
 use App\Domain\System\Services\HostCapabilityInspector;
 use App\Domain\Users\Permission;
+use App\Support\Navigation\NavigationBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -46,6 +48,8 @@ class AppServiceProvider extends ServiceProvider
         Model::shouldBeStrict(! $this->app->isProduction());
 
         $this->registerPermissionGates();
+
+        $this->registerNavigationComposer();
     }
 
     /**
@@ -63,5 +67,16 @@ class AppServiceProvider extends ServiceProvider
                 return $user->role->allows($permission);
             });
         }
+    }
+
+    /**
+     * Share the current account's navigation with the layout.
+     *
+     * The layout cannot ask the container for it directly, and injecting it per
+     * view would put the same construction in a dozen templates.
+     */
+    private function registerNavigationComposer(): void
+    {
+        View::composer('components.layout', NavigationBuilder::class);
     }
 }
