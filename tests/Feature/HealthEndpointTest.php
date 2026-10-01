@@ -39,14 +39,20 @@ class HealthEndpointTest extends TestCase
     {
         config()->set('sender.diagnostics.enabled', false);
 
+        // The page still renders, because a navigation link that 404s by
+        // configuration teaches operators to distrust the navigation. What it
+        // withholds is the detailed report, and it says so.
         $this->actingAs(User::factory()->role(Role::Support)->create())
-            ->get('/diagnostics')
-            ->assertNotFound();
+            ->get(route('admin.system.diagnostics'))
+            ->assertOk()
+            ->assertSee('Detailed diagnostics are disabled')
+            ->assertDontSee('Host checks');
     }
 
     public function test_the_diagnostics_page_requires_authentication(): void
     {
         $this->get('/diagnostics')->assertRedirect('/login');
+        $this->get(route('admin.system.diagnostics'))->assertRedirect('/login');
     }
 
     public function test_the_diagnostics_page_renders_the_registry_output(): void
@@ -54,7 +60,7 @@ class HealthEndpointTest extends TestCase
         $user = User::factory()->role(Role::Support)->create();
 
         $this->actingAs($user)
-            ->get('/diagnostics')
+            ->get(route('admin.system.diagnostics'))
             ->assertOk()
             ->assertSee('Capabilities')
             ->assertSee('Subsystems')
@@ -68,12 +74,16 @@ class HealthEndpointTest extends TestCase
 
         // /health publishes the raw status; the page shows the same status as
         // a human label. Both must come from the one registry.
+        //
+        // This previously passed for the wrong reason: the page showed the
+        // report's own aggregate, which is a different calculation and reported
+        // UNKNOWN, while "Unknown" also appeared in the per-subject badges.
         $capability = CapabilityStatus::from(
             $this->getJson('/health')->json('capability'),
         );
 
         $this->actingAs($user)
-            ->get('/diagnostics')
+            ->get(route('admin.system.diagnostics'))
             ->assertOk()
             ->assertSee($capability->label());
     }
