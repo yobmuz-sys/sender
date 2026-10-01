@@ -32,6 +32,14 @@ final class HostCapabilityInspector implements HostInspector
      *
      * @var list<string>
      */
+    /**
+     * Mailers that discard messages. Correct in development, wrong anywhere
+     * a user is waiting for a password reset link.
+     *
+     * @var list<string>
+     */
+    private const NON_DELIVERING_MAILERS = ['log', 'null', 'array', 'failover'];
+
     private const EXTERNAL_DRIVERS = ['redis', 'memcached', 'dynamodb', 'apc'];
 
     private readonly HostEnvironment $environment;
@@ -288,7 +296,40 @@ final class HostCapabilityInspector implements HostInspector
             $checks[] = $this->queueReservationCheck();
         }
 
+        $checks[] = $this->mailerCheck();
+
         return $checks;
+    }
+
+    /**
+     * Report which transport transactional mail is configured to use.
+     *
+     * Deliberately untagged, so it does not become the SMTP capability. A
+     * non-delivering mailer is a configuration state, not a measurement of
+     * whether SMTP works, and the capability is established only by running
+     * `sender:verify-smtp`. Reported as DEGRADED rather than UNAVAILABLE because
+     * the `log` mailer is correct in development, and a check that failed every
+     * developer machine and every test run would be ignored everywhere.
+     *
+     * It is still worth surfacing loudly: password reset silently does nothing
+     * under this mailer, which is exactly the kind of failure that reaches
+     * production unnoticed.
+     */
+    private function mailerCheck(): CapabilityCheck
+    {
+        $mailer = (string) config('mail.default');
+
+        return in_array($mailer, self::NON_DELIVERING_MAILERS, true)
+            ? CapabilityCheck::degraded(
+                'transactional mailer',
+                $mailer,
+                [
+                    sprintf("Transactional mail is configured to use the '%s' mailer, which discards messages.", $mailer),
+                    'Password reset and any other notification will appear to succeed but reach nobody.',
+                    'Set MAIL_MAILER to smtp and configure MAIL_HOST, MAIL_PORT and credentials.',
+                ],
+            )
+            : CapabilityCheck::ready('transactional mailer', $mailer);
     }
 
     /**

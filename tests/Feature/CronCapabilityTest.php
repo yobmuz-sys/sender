@@ -8,6 +8,7 @@ use App\Domain\System\Capabilities\CapabilityRegistry;
 use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\Enums\CapabilitySubject;
+use App\Domain\System\Mail\SmtpCapability;
 use App\Domain\System\Runs\RunObserver;
 use App\Domain\System\Runs\RunRecorder;
 use App\Domain\System\Runs\ScheduledRun;
@@ -110,6 +111,7 @@ class CronCapabilityTest extends TestCase
         return (new CapabilityRegistry(
             app(HostInspector::class),
             app(RunObserver::class),
+            app(SmtpCapability::class),
         ))->status(CapabilitySubject::Cron);
     }
 }

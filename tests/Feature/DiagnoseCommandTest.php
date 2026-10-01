@@ -10,6 +10,7 @@ use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\Enums\CapabilitySubject;
 use App\Domain\System\HostCapabilityReport;
+use App\Domain\System\Mail\SmtpCapability;
 use App\Domain\System\Runs\RunObserver;
 use Tests\TestCase;
 
@@ -107,6 +108,7 @@ class DiagnoseCommandTest extends TestCase
             fn ($app) => new CapabilityRegistry(
                 $app->make(HostInspector::class),
                 $app->make(RunObserver::class),
+                $app->make(SmtpCapability::class),
             ),
         );
     }

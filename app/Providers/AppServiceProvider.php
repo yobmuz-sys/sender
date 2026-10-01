@@ -8,6 +8,7 @@ use App\Domain\System\Capabilities\CapabilityRegistry;
 use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Entitlements\DenyAllEntitlement;
 use App\Domain\System\Entitlements\Entitlement;
+use App\Domain\System\Mail\SmtpCapability;
 use App\Domain\System\Runs\RunObserver;
 use App\Domain\System\Services\HostCapabilityInspector;
 use App\Domain\Users\Permission;
@@ -33,6 +34,7 @@ class AppServiceProvider extends ServiceProvider
             fn ($app) => new CapabilityRegistry(
                 $app->make(HostInspector::class),
                 $app->make(RunObserver::class),
+                $app->make(SmtpCapability::class),
             ),
         );
     }

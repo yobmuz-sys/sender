@@ -7,8 +7,10 @@ namespace Tests\Feature;
 use App\Domain\Users\Enums\Role;
 use App\Models\User;
 use Illuminate\Auth\Events\Registered;
+use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\RateLimiter;
 use Tests\TestCase;
 
@@ -152,10 +154,96 @@ class AuthenticationTest extends TestCase
 
     public function test_a_password_reset_link_can_be_requested_for_an_unknown_address(): void
     {
-        $this->post('/forgot-password', ['email' => 'nobody@example.com'])
-            ->assertSessionHas('status');
+        $response = $this->post('/forgot-password', ['email' => 'nobody@example.com']);
+
+        $response->assertSessionHas('status');
 
         $this->assertGuest();
+    }
+
+    /**
+     * The previous assertion proved only that a redirect happened, which is why
+     * a password reset that never reaches anyone could pass the suite.
+     *
+     * This asserts the observable behaviour the feature promises: for a known
+     * address the broker accepts the request and a message is actually
+     * composed, addressed to that account.
+     */
+    public function test_requesting_a_reset_composes_a_message_for_a_known_address(): void
+    {
+        Notification::fake();
+
+        $user = User::factory()->create();
+
+        $this->post('/forgot-password', ['email' => $user->email])
+            ->assertSessionHas('status');
+
+        Notification::assertSentTo($user, ResetPassword::class, function (ResetPassword $notification) use ($user): bool {
+            $this->assertNotEmpty($notification->token);
+
+            // Rendering proves the mail view resolves, and that the token is
+            // actually embedded in the message. A composed message whose link
+            // cannot be used proves nothing about the feature working.
+            $rendered = (string) $notification->toMail($user)->render();
+
+            $this->assertStringContainsString($notification->token, $rendered);
+
+            return true;
+        });
+    }
+
+    /**
+     * Enumeration resistance must survive the improved coverage: an unknown
+     * address must produce the same external response as a known one.
+     */
+    public function test_a_known_and_an_unknown_address_are_indistinguishable(): void
+    {
+        Notification::fake();
+
+        $user = User::factory()->create();
+
+        $known = $this->post('/forgot-password', ['email' => $user->email]);
+        $unknown = $this->post('/forgot-password', ['email' => 'nobody@example.com']);
+
+        $this->assertSame(
+            $known->getSession()->get('status'),
+            $unknown->getSession()->get('status'),
+            'the response must not reveal whether an account exists',
+        );
+
+        Notification::assertSentToTimes($user, ResetPassword::class, 1);
+        Notification::assertNothingSentTo(
+            User::factory()->create(['email' => 'nobody@example.com']),
+            ResetPassword::class,
+        );
+    }
+
+    public function test_a_password_reset_can_be_completed_with_the_issued_token(): void
+    {
+        Notification::fake();
+
+        $user = User::factory()->create();
+
+        $this->post('/forgot-password', ['email' => $user->email])->assertSessionHas('status');
+
+        $token = null;
+
+        Notification::assertSentTo($user, ResetPassword::class, function (ResetPassword $notification) use (&$token): bool {
+            $token = $notification->token;
+
+            return true;
+        });
+
+        $this->assertNotNull($token, 'a reset notification must carry a token');
+
+        $this->post('/reset-password', [
+            'token' => $token,
+            'email' => $user->email,
+            'password' => 'a-brand-new-secret',
+            'password_confirmation' => 'a-brand-new-secret',
+        ])->assertRedirect('/login');
+
+        $this->assertTrue(Hash::check('a-brand-new-secret', (string) $user->fresh()->password));
     }
 
     public function test_a_password_can_be_reset_with_a_valid_token(): void

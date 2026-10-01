@@ -9,6 +9,7 @@ use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\Enums\CapabilitySubject;
 use App\Domain\System\HostCapabilityReport;
+use App\Domain\System\Mail\SmtpCapability;
 use App\Domain\System\Runs\RunObserver;
 
 /**
@@ -30,16 +31,18 @@ final class CapabilityRegistry
     public function __construct(
         private readonly HostInspector $inspector,
         private readonly RunObserver $runs,
+        private readonly SmtpCapability $smtp,
     ) {}
 
     /**
-     * The raw host measurement, including the cron observation.
+     * The raw host measurement, including the capability observations.
      */
     public function report(): HostCapabilityReport
     {
         return $this->report ??= HostCapabilityReport::fromChecks([
             ...$this->inspector->inspect()->checks,
             $this->runs->check(),
+            $this->smtp->check(),
         ]);
     }
 

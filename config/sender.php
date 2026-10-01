@@ -60,6 +60,16 @@ return [
         'queue' => [
             'reservation_margin_seconds' => (int) env('SENDER_QUEUE_RESERVATION_MARGIN_SECONDS', 60),
         ],
+
+        /*
+        | SMTP is established by `sender:verify-smtp`, not inferred from
+        | configuration. Credentials being present is not evidence that they
+        | work, so the capability stays UNKNOWN until somebody verifies.
+        */
+        'smtp' => [
+            // How long a recorded verification is treated as current.
+            'fresh_after_seconds' => (int) env('SENDER_SMTP_FRESH_AFTER_SECONDS', 86400),
+        ],
     ],
 
     /*
