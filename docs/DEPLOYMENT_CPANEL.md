@@ -285,7 +285,7 @@ emails, with no exception and nothing in the log.
 The deployment therefore has to satisfy:
 
 ```
-retry_after >= SENDER_DEPLOYMENT_LIMIT_MAX_WORKER_RUNTIME_SECONDS + SENDER_QUEUE_RESERVATION_MARGIN_SECONDS
+DB_QUEUE_RETRY_AFTER >= SENDER_DEPLOYMENT_LIMIT_MAX_WORKER_RUNTIME_SECONDS + SENDER_QUEUE_RESERVATION_MARGIN_SECONDS
 ```
 
 The shipped defaults give `300 >= 240 + 60`, which satisfies it with margin.
@@ -293,10 +293,11 @@ The shipped defaults give `300 >= 240 + 60`, which satisfies it with margin.
 numbers when it does not hold, and applies this check only to the `database`
 driver.
 
-If you raise the worker runtime, raise `retry_after` with it:
+If you raise the worker runtime, raise `retry_after` with it. The variable is
+named after the connection Laravel reads it for, following its own convention:
 
 ```
-QUEUE_RETRY_AFTER=600
+DB_QUEUE_RETRY_AFTER=600
 SENDER_DEPLOYMENT_LIMIT_MAX_WORKER_RUNTIME_SECONDS=240
 ```
 

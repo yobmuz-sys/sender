@@ -148,11 +148,30 @@ return [
         // Bytes accepted for a single uploaded file.
         'max_upload_bytes' => (int) env('SENDER_DEPLOYMENT_LIMIT_MAX_UPLOAD_BYTES', 10 * 1024 * 1024),
 
-        // Bytes accepted for pasted text (page source, article body, list).
-        'max_text_input_bytes' => (int) env('SENDER_DEPLOYMENT_LIMIT_MAX_TEXT_INPUT_BYTES', 2 * 1024 * 1024),
+        /*
+        | Bytes accepted for pasted text (page source, article body, list).
+        |
+        | Kept small deliberately. This is a shared-hosting installation with a
+        | 240s worker budget, and a multi-megabyte POST has to be received, held
+        | in memory, parsed and written to the database before anything else can
+        | happen. Pasted content for a single list or article is normally a few
+        | hundred kilobytes, so the ceiling costs nothing in practice.
+        */
+        'max_text_input_bytes' => (int) env('SENDER_DEPLOYMENT_LIMIT_MAX_TEXT_INPUT_BYTES', 1024 * 1024),
 
-        // Number of seed URLs accepted by one extraction request.
-        'max_urls_per_request' => (int) env('SENDER_DEPLOYMENT_LIMIT_MAX_URLS_PER_REQUEST', 1000),
+        /*
+        | Number of seed URLs accepted by one extraction request.
+        |
+        | This is deliberately coupled to `max_worker_runtime_seconds`. A request
+        | that seeds 1,000 URLs cannot finish inside a 240s budget at any
+        | plausible per-URL cost, so the old default guaranteed a timeout and a
+        | partial result rather than an honest failure. At a pessimistic two
+        | seconds per fetch, 100 URLs fits with headroom to spare.
+        |
+        | Raise this only together with the worker runtime, and only if the host
+        | can actually run a request that long.
+        */
+        'max_urls_per_request' => (int) env('SENDER_DEPLOYMENT_LIMIT_MAX_URLS_PER_REQUEST', 100),
 
         // Seconds a single cron/worker invocation may run before it must exit.
         'max_worker_runtime_seconds' => (int) env('SENDER_DEPLOYMENT_LIMIT_MAX_WORKER_RUNTIME_SECONDS', 240),
