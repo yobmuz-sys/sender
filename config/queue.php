@@ -39,7 +39,24 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
-            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 90),
+
+            /*
+             * How long a popped job stays reserved before another worker may
+             * treat it as abandoned and pop it again.
+             *
+             * This MUST exceed the longest a single job is allowed to run, or
+             * two workers can execute the same job at once. The default here is
+             * not an arbitrary choice: it is the value that satisfies the
+             * invariant checked by HostCapabilityInspector, namely
+             *
+             *     retry_after >= max_worker_runtime_seconds + margin
+             *
+             * against the default deployment limit of 240 seconds plus a
+             * 60 second margin. Raising max_worker_runtime_seconds without
+             * raising this is reported as UNAVAILABLE rather than silently
+             * permitting concurrent execution.
+             */
+            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 300),
             'after_commit' => false,
         ],
 

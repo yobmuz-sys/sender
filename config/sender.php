@@ -46,6 +46,20 @@ return [
         'cron' => [
             'stale_after_seconds' => (int) env('SENDER_CRON_STALE_AFTER_SECONDS', 900),
         ],
+
+        /*
+        | The database queue treats a job as abandoned once its reservation is
+        | older than retry_after, and will hand it to another worker. That makes
+        | retry_after a correctness constraint rather than a tuning knob: it must
+        | exceed the longest a worker is permitted to run, or the same job can
+        | execute twice concurrently.
+        |
+        | This margin is added to max_worker_runtime_seconds to produce the
+        | minimum acceptable retry_after.
+        */
+        'queue' => [
+            'reservation_margin_seconds' => (int) env('SENDER_QUEUE_RESERVATION_MARGIN_SECONDS', 60),
+        ],
     ],
 
     /*

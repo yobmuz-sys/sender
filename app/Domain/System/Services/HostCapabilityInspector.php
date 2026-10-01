@@ -278,7 +278,57 @@ final class HostCapabilityInspector implements HostInspector
                 : CapabilityCheck::ready("{$label} driver", $driver, subject: $subject);
         }
 
+        // The database queue decides a job was abandoned by comparing the age of
+        // its reservation against retry_after, and will hand it to a second
+        // worker. A reservation window shorter than the permitted runtime is
+        // therefore not a tuning problem: it permits the same job to execute
+        // twice at once. Reported as UNAVAILABLE because it is a definite
+        // misconfiguration rather than reduced headroom.
+        if ((string) config('queue.default') === 'database') {
+            $checks[] = $this->queueReservationCheck();
+        }
+
         return $checks;
+    }
+
+    /**
+     * Verify the queue reservation window cannot undercut the worker runtime.
+     */
+    private function queueReservationCheck(): CapabilityCheck
+    {
+        $name = 'queue reservation window';
+
+        $runtime = DeploymentLimit::MaxWorkerRuntimeSeconds->value();
+        $margin = (int) config('sender.capabilities.queue.reservation_margin_seconds', 60);
+        $required = $runtime + $margin;
+        $configured = (int) config('queue.connections.database.retry_after', 0);
+
+        if ($configured >= $required) {
+            return CapabilityCheck::ready(
+                $name,
+                sprintf('%ds (worker runtime %ds + %ds margin)', $configured, $runtime, $margin),
+                subject: CapabilitySubject::Queue,
+            );
+        }
+
+        return CapabilityCheck::unavailable(
+            $name,
+            sprintf('%ds is shorter than the %ds a worker may run for', $configured, $required),
+            [
+                sprintf(
+                    'Set DB_QUEUE_RETRY_AFTER to at least %d (worker runtime %ds plus a %ds margin).',
+                    $required,
+                    $runtime,
+                    $margin,
+                ),
+                'A reservation window shorter than the worker runtime lets a second worker pick up a job that is still running.',
+                sprintf(
+                    'Alternatively lower SENDER_DEPLOYMENT_LIMIT_MAX_WORKER_RUNTIME_SECONDS to %d.',
+                    max(0, $configured - $margin),
+                ),
+            ],
+            CapabilitySubject::Queue,
+        );
     }
 
     /**
