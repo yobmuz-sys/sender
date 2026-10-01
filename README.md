@@ -11,7 +11,8 @@ long-running daemons and root access are **not** required at any point.
 
 ## Current status
 
-This repository is at **Stage 1 — application foundation**.
+This repository is at **Stage 2 — capability, availability and deployment control
+foundation**.
 
 Implemented and tested:
 
@@ -22,11 +23,16 @@ Implemented and tested:
 | Database connection and foundation migrations | done |
 | Authentication (register, login, logout, password reset) | done |
 | Role and permission authorization foundation | done |
-| Centralized resource limit configuration | done |
 | Host capability inspector and health endpoint | done |
 | Production-safe logging and secret redaction | done |
 | Automated test suite | done |
 | cPanel deployment documentation | done |
+| Capability vocabulary (`READY`/`DEGRADED`/`UNKNOWN`/`UNAVAILABLE`) | done |
+| Shared capability registry behind every diagnostic surface | done |
+| Deployment limits, kept distinct from host requirements | done |
+| Deny-by-default entitlement seam | done |
+| Operator subsystem kill switches | done |
+| Cron observation via `sender:heartbeat` | done |
 
 **Not** implemented, and deliberately so at this stage: the email extractor,
 the web crawler, SMTP campaign sending, recipients, suppression, plans,
@@ -105,8 +111,29 @@ php artisan sender:set-role you@example.com super_admin
 php artisan sender:diagnose
 ```
 
-This prints the same report shown at `/diagnostics`, and exits non-zero when a
-required capability is unavailable.
+This prints the same report shown at `/diagnostics`.
+
+It exits non-zero only when a capability is measured as `UNAVAILABLE`, or when a
+capability listed in `SENDER_REQUIRED_CAPABILITIES` cannot be established. A
+`DEGRADED` host exits `0` with warnings: it is operational, just with less
+headroom, and a check that fails on it would be a check operators learn to
+ignore.
+
+A capability the platform has never measured reports `UNKNOWN`, which is not a
+failure. Today `url_fetch` and `smtp` are `UNKNOWN`, because no code exists yet
+to perform them.
+
+### Observing cron
+
+cPanel cannot tell PHP whether a cron entry exists, so the platform records that
+the scheduler ran and infers the capability from it. Point a cPanel Cron Job at:
+
+```
+*/5 * * * * cd /home/USER/sender && /usr/local/bin/php artisan sender:heartbeat >> /dev/null 2>&1
+```
+
+Until the first heartbeat arrives, cron reports `UNKNOWN`. It is never reported
+`UNAVAILABLE`, because there is no positive evidence to justify that.
 
 ### Running the tests
 

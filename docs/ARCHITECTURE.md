@@ -50,7 +50,7 @@ and provide nothing that Blade does not, at this stage.
 ```
 app/
 ├── Domain/            Business concepts, independent of the framework
-│   ├── System/        Host capability, limits
+│   ├── System/        Host capability, deployment limits, subsystem flags
 │   └── Users/         Roles and permissions
 ├── Http/              Controllers and form requests
 ├── Models/            Eloquent persistence models
@@ -99,42 +99,132 @@ they can be stored rather than implied by a role name.
 ## 6. Resource limits are configuration, not code
 
 Every hard boundary is declared in `config/sender.php` and read through the
-`Limit` enum:
+`DeploymentLimit` enum:
 
 ```php
-if ($size > Limit::MaxUploadBytes->value()) { ... }
+if ($size > DeploymentLimit::MaxUploadBytes->value()) { ... }
 ```
 
 Business logic never contains a magic number, and each limit is overridable per
-deployment through an environment variable. That is what allows the same
-codebase to serve a small shared plan and a larger one.
+deployment through a `SENDER_DEPLOYMENT_LIMIT_*` environment variable. That is
+what allows the same codebase to serve a small shared plan and a larger one.
+
+Four different boundaries are deliberately kept apart, because collapsing them
+produces limits that cannot be reasoned about:
+
+| Concept | Question it answers | Tunable by |
+| --- | --- | --- |
+| `requirements` | What must the host provide? | nobody; they are platform constants |
+| `DeploymentLimit` | What does this installation permit? | the operator |
+| `Entitlement` | What is this account granted? | the plans stage |
+| usage | What has this account consumed? | the plans stage |
+
+`requirements` is not operator-tunable on purpose. Loosening
+`memory_limit_bytes` does not give a host more memory, so making it a setting
+would only create the illusion of a change.
 
 The limits are declared now but only partially consumed. The upload limit is
 already read by the capability inspector, because a host whose
 `upload_max_filesize` is below the configured maximum is a configuration error
 worth reporting before the extraction stage ships.
 
-## 7. Host capability reporting
+## 7. Capability reporting
 
-`HostCapabilityInspector` produces checks classified as `READY`, `DEGRADED` or
-`UNAVAILABLE`. The report's overall verdict is the worst individual check: a
-host missing one required extension is never reported as fully ready.
+Three layers, in strict order of who is allowed to ask what:
 
-`DEGRADED` is used for a value that is present but below the recommended
-threshold (for example `memory_limit` of 128M). The host still works, and the
-platform is designed to stay inside that headroom through the configured
-limits. `UNAVAILABLE` is reserved for a genuinely missing dependency.
+```
+HostCapabilityInspector   measures the host        (the only code that calls
+                                                      ini_get() and friends)
+        ↓ HostCapabilityReport
+CapabilityRegistry        what the application may rely on
+        ↓
+AvailabilityResolver      may this operation proceed, and why not
+```
 
-**The inspector reports only what it measures.** Checks that need an external
-dependency the platform does not require — DNS resolution, outbound SMTP
-reachability — are absent, because claiming a capability that has never been
-tested is worse than reporting nothing. They are added by the stages that
-depend on them.
+`/health`, `/diagnostics` and `sender:diagnose` all consume the registry. No
+surface re-implements a check, so they cannot disagree.
+
+### Statuses mean exactly one thing each
+
+```
+UNKNOWN       not established — nothing has measured this yet
+READY         measured, and it passed
+DEGRADED      measured, working with less headroom than the platform prefers
+UNAVAILABLE   measured, and known not to work
+NOT_ENTITLED  a separate authorization fact about an account, not a capability
+```
+
+`UNKNOWN` is not a failure. It means the platform does not yet have sufficient
+evidence to classify a capability, and **whether that blocks a particular
+operation is decided by the consuming requirement, not by the registry**.
+Folding policy into the registry would make every future feature inherit a
+policy nobody chose.
+
+This is why `url_fetch` and `smtp` report `UNKNOWN` today, and why a loaded
+`openssl` extension does not promote SMTP to `READY`: a prerequisite is not
+proof. Both become `READY` when the code that performs them exists to be
+measured.
+
+`CapabilitySubject::isRequired()` reads `sender.capabilities.required`, which
+is empty. An `UNKNOWN` capability nothing depends on is reported but does not
+fail the installation; an `UNKNOWN` capability that is required does.
+
+### Diagnostic severity is not process exit status
+
+| Overall status | `sender:diagnose` exit |
+| --- | --- |
+| `READY` | 0 |
+| `DEGRADED` | 0, with warnings |
+| `UNAVAILABLE` | non-zero |
+| `UNKNOWN` | non-zero only when the subject is required |
+
+A degraded host is operational: it works with less headroom, and the
+deployment limits exist precisely so it stays inside that headroom. Failing the
+command for `DEGRADED` would train operators to ignore it, and would make the
+check useless on the small shared plans this platform targets.
+
+### The inspector reports only what it measures
+
+Checks that need an external dependency the platform does not require — DNS
+resolution, outbound SMTP reachability — are absent, because claiming a
+capability that has never been tested is worse than reporting nothing. They are
+added by the stages that depend on them.
 
 `HostEnvironment` exists so runtime readings are injectable. The CLI SAPI and
 the web SAPI report different `max_execution_time` values, and a test cannot
 change the SAPI it runs in; the value object makes the web-only code path
 testable.
+
+### Cron cannot be detected, only observed
+
+cPanel exposes no API that answers "is a cron entry configured?". The only
+honest signal is that the scheduled command actually ran, so:
+
+| Observed state | Capability |
+| --- | --- |
+| never | `UNKNOWN` |
+| recent | `READY` |
+| stale | `DEGRADED` |
+| not observed | never `UNAVAILABLE` — there is no positive evidence to justify it |
+
+`sender:heartbeat` records the observation. Stage 1 required no Cron at all;
+Stage 2 observes it; Stage 3 is the first stage that uses it for work.
+
+### Operator control is one flag, persisted
+
+`SubsystemFlagRegistry` is the single mechanism for safe mode, emergency
+disablement and subsystem toggles. They differ only in intent, and splitting
+them would mean three places to check before allowing an operation.
+
+Flags are stored in `system_settings`, not the cache, because a cache-cleared
+kill switch that silently re-enables a subsystem is worse than no kill switch
+at all.
+
+### Entitlement fails closed
+
+`Entitlement` is a deny-by-default interface, currently bound to
+`DenyAllEntitlement`. When the plans stage replaces that binding, no service
+that depends on the interface has to change.
 
 ## 8. Health endpoint versus diagnostics
 

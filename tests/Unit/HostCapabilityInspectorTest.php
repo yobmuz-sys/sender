@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
-use App\Domain\System\Enums\Capability;
+use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\HostCapabilityReport;
 use App\Domain\System\HostEnvironment;
 use App\Domain\System\Services\HostCapabilityInspector;
@@ -75,7 +75,7 @@ class HostCapabilityInspectorTest extends TestCase
 
         $this->assertSame('UNAVAILABLE', $report->asMap()['PHP runtime']);
         $this->assertFalse($report->passes);
-        $this->assertNotSame(Capability::Ready, $report->overall);
+        $this->assertNotSame(CapabilityStatus::Ready, $report->overall);
     }
 
     public function test_an_unlimited_memory_limit_is_flagged_as_degraded(): void

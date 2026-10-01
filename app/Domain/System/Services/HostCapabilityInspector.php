@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Domain\System\Services;
 
 use App\Domain\System\CapabilityCheck;
-use App\Domain\System\Enums\Limit;
+use App\Domain\System\Contracts\HostInspector;
+use App\Domain\System\Enums\CapabilitySubject;
+use App\Domain\System\Enums\DeploymentLimit;
 use App\Domain\System\HostCapabilityReport;
 use App\Domain\System\HostEnvironment;
 use App\Support\Bytes;
@@ -21,7 +23,7 @@ use Throwable;
  * SMTP reachability) are deliberately absent until the feature that depends on
  * them is implemented, so the report never claims a capability is untested.
  */
-final class HostCapabilityInspector
+final class HostCapabilityInspector implements HostInspector
 {
     /**
      * Storage and cache drivers that assume a service outside the shared
@@ -53,6 +55,27 @@ final class HostCapabilityInspector
     }
 
     /**
+     * Which capability an extension is evidence for.
+     *
+     * Deliberately empty. A loaded extension is a prerequisite, not proof:
+     * reporting SMTP as READY because OpenSSL is present would claim a
+     * capability nobody has tested, which is precisely how an unverified
+     * dependency becomes an assumed one.
+     *
+     * A subject is assigned only when the check measures that capability's
+     * actual prerequisites. URL fetching and SMTP therefore report UNKNOWN
+     * until the code that performs them exists to be measured against.
+     *
+     * @var array<string, CapabilitySubject>
+     */
+    private const EXTENSION_SUBJECTS = [];
+
+    private function extensionSubject(string $extension): ?CapabilitySubject
+    {
+        return self::EXTENSION_SUBJECTS[$extension] ?? null;
+    }
+
+    /**
      * @return list<CapabilityCheck>
      */
     private function runtimeChecks(): array
@@ -70,12 +93,15 @@ final class HostCapabilityInspector
             );
 
         foreach ((array) config('sender.requirements.extensions', []) as $extension) {
+            $subject = $this->extensionSubject((string) $extension);
+
             $checks[] = extension_loaded((string) $extension)
-                ? CapabilityCheck::ready('ext: '.$extension)
+                ? CapabilityCheck::ready('ext: '.$extension, subject: $subject)
                 : CapabilityCheck::unavailable(
                     'ext: '.$extension,
                     'not loaded',
                     ["Enable the '{$extension}' extension in cPanel -> Select PHP Version."],
+                    $subject,
                 );
         }
 
@@ -108,13 +134,13 @@ final class HostCapabilityInspector
                 static fn (int $seconds): string => $seconds.'s',
             );
 
-        $requiredUpload = Limit::MaxUploadBytes->value();
+        $requiredUpload = DeploymentLimit::MaxUploadBytes->value();
 
         $checks[] = $this->compare(
             'upload_max_filesize',
             $this->environment->maxUploadBytes,
             $requiredUpload,
-            Limit::MaxUploadBytes->humanValue(),
+            DeploymentLimit::MaxUploadBytes->humanValue(),
             ['Raise upload_max_filesize/post_max_size, or lower the SENDER_LIMIT_MAX_UPLOAD_BYTES limit.'],
         );
 
@@ -122,7 +148,7 @@ final class HostCapabilityInspector
             'post_max_size',
             $this->environment->maxPostBytes,
             $requiredUpload,
-            Limit::MaxUploadBytes->humanValue(),
+            DeploymentLimit::MaxUploadBytes->humanValue(),
             ['post_max_size must be at least as large as upload_max_filesize.'],
         );
 
@@ -198,11 +224,12 @@ final class HostCapabilityInspector
 
         foreach ($paths as $label => $path) {
             $checks[] = is_dir($path) && is_writable($path)
-                ? CapabilityCheck::ready("writable: {$label}")
+                ? CapabilityCheck::ready("writable: {$label}", subject: CapabilitySubject::Storage)
                 : CapabilityCheck::unavailable(
                     "writable: {$label}",
                     is_dir($path) ? 'directory is not writable' : 'directory is missing',
                     ["chmod 775 {$label} and confirm the owner is the PHP user."],
+                    CapabilitySubject::Storage,
                 );
         }
 
@@ -210,13 +237,14 @@ final class HostCapabilityInspector
         $free = @disk_free_space(base_path());
 
         $checks[] = $free === false
-            ? CapabilityCheck::degraded('free disk space', 'unknown', ['Ask the host for the disk quota of the account.'])
+            ? CapabilityCheck::degraded('free disk space', 'unknown', ['Ask the host for the disk quota of the account.'], CapabilitySubject::Storage)
             : $this->compare(
                 'free disk space',
                 (int) $free,
                 $minimumFree,
                 '512M',
                 ['Extraction and campaign storage share this quota, so 512M is the practical floor.'],
+                subject: CapabilitySubject::Storage,
             );
 
         return $checks;
@@ -236,13 +264,18 @@ final class HostCapabilityInspector
         ];
 
         foreach ($drivers as $label => $driver) {
+            // Sessions and cache run inside a request; only the queue backs
+            // asynchronous processing, so only it informs the queue capability.
+            $subject = $label === 'queue' ? CapabilitySubject::Queue : null;
+
             $checks[] = in_array($driver, self::EXTERNAL_DRIVERS, true)
                 ? CapabilityCheck::unavailable(
                     "{$label} driver",
                     $driver,
                     ["Sender requires no external services. Use the 'database' driver for {$label}."],
+                    $subject,
                 )
-                : CapabilityCheck::ready("{$label} driver", $driver);
+                : CapabilityCheck::ready("{$label} driver", $driver, subject: $subject);
         }
 
         return $checks;
@@ -285,6 +318,7 @@ final class HostCapabilityInspector
      *
      * @param  list<string>  $remedies
      * @param  (callable(int): string)|null  $format
+     * @param  CapabilitySubject|null  $subject  The capability this check is evidence for.
      */
     private function compare(
         string $name,
@@ -293,17 +327,19 @@ final class HostCapabilityInspector
         string $humanRequired,
         array $remedies = [],
         ?callable $format = null,
+        ?CapabilitySubject $subject = null,
     ): CapabilityCheck {
         $format ??= static fn (int $value): string => Bytes::humanize($value);
 
         if ($measured >= $required) {
-            return CapabilityCheck::ready($name, $format($measured));
+            return CapabilityCheck::ready($name, $format($measured), subject: $subject);
         }
 
         return CapabilityCheck::degraded(
             $name,
             sprintf('%s (needs %s)', $format($measured), $humanRequired),
             $remedies !== [] ? $remedies : ["Raise {$name} to at least {$humanRequired} in cPanel -> Select PHP Version -> Options."],
+            $subject,
         );
     }
 }

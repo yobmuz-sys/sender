@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
-use App\Domain\System\Enums\Capability;
-use App\Domain\System\Services\HostCapabilityInspector;
+use App\Domain\System\Capabilities\AvailabilityResolver;
+use App\Domain\System\Capabilities\CapabilityRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 use Illuminate\View\View;
@@ -13,7 +13,8 @@ use Illuminate\View\View;
 class DiagnosticsController extends Controller
 {
     public function __construct(
-        private readonly HostCapabilityInspector $inspector,
+        private readonly CapabilityRegistry $capabilities,
+        private readonly AvailabilityResolver $availability,
     ) {}
 
     /**
@@ -23,18 +24,24 @@ class DiagnosticsController extends Controller
      * never host paths, versions or dependency detail, so it is safe to leave
      * reachable on a monitoring service.
      *
-     * A DEGRADED host still answers correctly (for example a low memory_limit
-     * on a small shared plan), so it reports 200. Only a missing required
-     * dependency makes the platform genuinely unserviceable and returns 503.
+     * Only UNAVAILABLE makes the platform genuinely unserviceable. DEGRADED is
+     * reported as-is because a host with less headroom still answers
+     * correctly, and UNKNOWN is only fatal when a required capability could not
+     * be established.
      */
     public function health(): JsonResponse
     {
-        $report = $this->inspector->inspect();
+        $overall = $this->capabilities->overall();
 
         return response()->json([
-            'status' => $report->overall->label() === 'Ready' ? 'ok' : strtolower($report->overall->label()),
-            'capability' => $report->overall->value,
-        ], $report->overall === Capability::Unavailable
+            'status' => match ($overall->value) {
+                'READY' => 'ok',
+                'DEGRADED' => 'degraded',
+                'UNKNOWN' => 'unknown',
+                default => 'unavailable',
+            },
+            'capability' => $overall->value,
+        ], $overall->isUnavailable()
             ? Response::HTTP_SERVICE_UNAVAILABLE
             : Response::HTTP_OK);
     }
@@ -50,7 +57,9 @@ class DiagnosticsController extends Controller
         abort_unless(config('sender.diagnostics.enabled'), Response::HTTP_NOT_FOUND);
 
         return view('diagnostics', [
-            'report' => $this->inspector->inspect(),
+            'report' => $this->capabilities->report(),
+            'capabilities' => $this->capabilities,
+            'availability' => $this->availability->resolveAll(),
         ]);
     }
 }

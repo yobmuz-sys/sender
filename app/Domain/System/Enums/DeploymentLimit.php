@@ -7,13 +7,21 @@ namespace App\Domain\System\Enums;
 use App\Support\Bytes;
 
 /**
- * Every resource boundary in the application, resolved from config/sender.php.
+ * Every resource boundary the operator can configure, resolved from
+ * config/sender.php -> deployment_limits.
  *
- * Business logic asks the enum rather than reading config or embedding a
+ * Deliberately distinct from three neighbouring concepts:
+ *
+ *   requirements        what the host must provide
+ *   deployment_limits   what this installation permits   (this enum)
+ *   entitlements        what an account is granted        (later stage)
+ *   usage               what an account has consumed      (later stage)
+ *
+ * Business logic asks this enum rather than reading config or embedding a
  * literal, so a deployment can change a ceiling without touching the code that
- * enforces it, and an unknown limit cannot be silently defaulted to zero.
+ * enforces it.
  */
-enum Limit: string
+enum DeploymentLimit: string
 {
     case MaxUploadBytes = 'max_upload_bytes';
     case MaxTextInputBytes = 'max_text_input_bytes';
@@ -26,11 +34,11 @@ enum Limit: string
     case MaxCampaignRecipients = 'max_campaign_recipients';
 
     /**
-     * The configured value for this limit.
+     * The configured ceiling for this limit.
      */
     public function value(): int
     {
-        return (int) config('sender.limits.'.$this->value, 0);
+        return (int) config('sender.deployment_limits.'.$this->value, 0);
     }
 
     /**

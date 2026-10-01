@@ -4,13 +4,18 @@ declare(strict_types=1);
 
 namespace App\Domain\System;
 
-use App\Domain\System\Enums\Capability;
+use App\Domain\System\Capabilities\CapabilityRegistry;
+use App\Domain\System\Enums\CapabilityStatus;
 
 /**
  * The aggregated result of one host inspection.
  *
+ * This is the *measurement* layer: what is true about this machine. It is not
+ * what the application should consume — {@see CapabilityRegistry}
+ * answers that, by combining these measurements with capability subjects.
+ *
  * The overall capability is the worst individual check: a host missing a single
- * required dependency is never reported as ready for the whole platform.
+ * required dependency is never reported as fully ready.
  */
 final readonly class HostCapabilityReport
 {
@@ -19,7 +24,7 @@ final readonly class HostCapabilityReport
      */
     public function __construct(
         public array $checks,
-        public Capability $overall,
+        public CapabilityStatus $overall,
         public bool $passes,
     ) {}
 
@@ -28,23 +33,25 @@ final readonly class HostCapabilityReport
      */
     public static function fromChecks(array $checks): self
     {
-        $overall = Capability::Ready;
+        $overall = CapabilityStatus::Ready;
 
         foreach ($checks as $check) {
             $overall = $overall->merge($check->capability);
         }
 
-        return new self($checks, $overall, $overall === Capability::Ready);
+        return new self($checks, $overall, $overall === CapabilityStatus::Ready);
     }
 
     /**
+     * Checks that did not come back READY.
+     *
      * @return list<CapabilityCheck>
      */
     public function problems(): array
     {
         return array_values(array_filter(
             $this->checks,
-            static fn (CapabilityCheck $check): bool => $check->capability !== Capability::Ready,
+            static fn (CapabilityCheck $check): bool => $check->capability !== CapabilityStatus::Ready,
         ));
     }
 

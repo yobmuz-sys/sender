@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Domain\System\CapabilityCheck;
-use App\Domain\System\Enums\Capability;
+use App\Domain\System\Enums\CapabilityStatus;
 use App\Domain\System\HostCapabilityReport;
 use PHPUnit\Framework\TestCase;
 
@@ -19,7 +19,7 @@ class HostCapabilityReportTest extends TestCase
         ]);
 
         $this->assertTrue($report->passes);
-        $this->assertSame(Capability::Ready, $report->overall);
+        $this->assertSame(CapabilityStatus::Ready, $report->overall);
         $this->assertSame([], $report->problems());
     }
 
@@ -32,7 +32,7 @@ class HostCapabilityReportTest extends TestCase
         ]);
 
         $this->assertFalse($report->passes);
-        $this->assertSame(Capability::Unavailable, $report->overall);
+        $this->assertSame(CapabilityStatus::Unavailable, $report->overall);
     }
 
     public function test_degraded_only_is_reported_as_degraded(): void
@@ -43,15 +43,15 @@ class HostCapabilityReportTest extends TestCase
         ]);
 
         $this->assertFalse($report->passes);
-        $this->assertSame(Capability::Degraded, $report->overall);
+        $this->assertSame(CapabilityStatus::Degraded, $report->overall);
         $this->assertCount(1, $report->problems());
     }
 
     public function test_capability_merge_keeps_the_worst_status(): void
     {
-        $this->assertSame(Capability::Degraded, Capability::Ready->merge(Capability::Degraded));
-        $this->assertSame(Capability::Degraded, Capability::Degraded->merge(Capability::Ready));
-        $this->assertSame(Capability::Unavailable, Capability::Degraded->merge(Capability::Unavailable));
-        $this->assertSame(Capability::Ready, Capability::Ready->merge(Capability::Ready));
+        $this->assertSame(CapabilityStatus::Degraded, CapabilityStatus::Ready->merge(CapabilityStatus::Degraded));
+        $this->assertSame(CapabilityStatus::Degraded, CapabilityStatus::Degraded->merge(CapabilityStatus::Ready));
+        $this->assertSame(CapabilityStatus::Unavailable, CapabilityStatus::Degraded->merge(CapabilityStatus::Unavailable));
+        $this->assertSame(CapabilityStatus::Ready, CapabilityStatus::Ready->merge(CapabilityStatus::Ready));
     }
 }

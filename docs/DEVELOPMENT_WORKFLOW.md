@@ -110,16 +110,16 @@ there. Do not repeat the original roadmap; the roadmap changes as the code does.
 ## Stage sequence
 
 ```
-0. Foundation / architecture            completed
-1. Laravel application foundation        completed
-2. SaaS users / features / plans         pending
-3. Job + cron processing engine         pending
-4. Email extraction engine              pending
-5. SMTP campaign engine                 pending
-6. Admin operations centre              pending
-7. API / PHP integration                pending
-8. Billing                              pending
-9. Security / performance / deployment  pending
+0. Foundation / architecture                    completed
+1. Laravel application foundation                completed
+2. Capability / availability / deployment control completed
+3. Job + cron processing engine                 pending
+4. Email extraction engine                      pending
+5. SMTP campaign engine                         pending
+6. Admin operations centre                      pending
+7. API / PHP integration                        pending
+8. Billing                                      pending
+9. Security / performance / deployment          pending
 ```
 
 The sequence is not automatic. If repository investigation at a later stage
@@ -134,5 +134,11 @@ gives a reason to reorder, the repository wins.
 - A stage that discovers a broken earlier decision fixes it. Leaving known
   incorrect code in place to keep a commit small is not a valid trade.
 - Documentation describes the present, not the intention.
+- A threshold is not a target. Do not weaken a host requirement to make a local
+  check pass; a green local run must not be bought by encoding a developer
+  workstation's configuration into the definition of a healthy deployment.
+- "Not established" and "known broken" are different answers. Never let an
+  unmeasured dependency be reported as a working one, and never let diagnostic
+  severity quietly become process exit status.
 - If something cannot be built within the cPanel constraint, it is deferred,
   not reimplemented with an extra service.
