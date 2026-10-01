@@ -204,7 +204,14 @@ and you need to know which one broke:
 | `configuration` | a mailer that actually delivers is configured |
 | `transport` | Laravel can build that transport from the configuration |
 | `connection` | the host resolves, connects, and negotiates the configured scheme |
+| `authentication` | the server rejected these credentials |
 | `acceptance` | the server accepted a test message from these credentials |
+
+`authentication` appears only when credentials are rejected. Symfony logs in
+during the same handshake that opens the socket, so a bad password and an
+unreachable host raise the same exception; they are separated and reported
+against the stage that actually failed, because an operator told "could not
+connect" when the real problem is a bad password would chase the wrong thing.
 
 Omitting `--to` proves the connection only, and the result is `DEGRADED`
 because the credentials were never exercised.
@@ -215,9 +222,10 @@ server accepted a message, and says so rather than letting "available" imply
 "delivered".
 
 The result is recorded, and the capability reports it from there, so an ordinary
-page view never opens a mail connection. An old verification degrades rather
-than being trusted forever. Discard one with
-`php artisan sender:verify-smtp --forget`.
+page view never opens a mail connection. A verification is not trusted
+indefinitely: an old one degrades, and one taken against a different `MAIL_MAILER`
+degrades immediately, because a verification records what was true when it ran.
+Discard one with `php artisan sender:verify-smtp --forget`.
 
 ### Queue reservation safety
 

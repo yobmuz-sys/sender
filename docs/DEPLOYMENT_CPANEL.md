@@ -128,19 +128,22 @@ php artisan sender:verify-smtp --to=you@example.com
 ```
 
 This prints one line per stage — `configuration`, `transport`, `connection`,
-`acceptance` — and exits non-zero if any of them fails, so it is safe to run
-from a deployment script.
+`authentication`, `acceptance` — and exits non-zero if any of them fails, so it
+is safe to run from a deployment script.
 
 Read the result precisely:
 
 - `acceptance ok` means **the server accepted a message from these
   credentials**. It does **not** mean the message was delivered to a mailbox.
   Nothing inside the application can observe that, and the command says so.
+- `authentication FAILED` with `connection ok` means the host was reachable and
+  the password or username was rejected. That is the common case, and it is
+  reported separately so you do not go looking at the network.
 - Omitting `--to` proves only the connection and reports `DEGRADED`, because
   the credentials were never exercised.
 - The result is recorded and shown by `sender:diagnose`, `/health` and
-  `/diagnostics`. Re-run it after changing any mail setting; an old
-  verification degrades rather than being trusted indefinitely.
+  `/diagnostics`. Re-run it after changing any mail setting: an old verification
+  degrades, and one taken against a different `MAIL_MAILER` degrades at once.
 
 If you are unsure whether a message arrived, send to an address you control and
 check it directly.

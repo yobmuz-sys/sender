@@ -115,4 +115,60 @@ class SensitiveDataTest extends TestCase
 
         $this->assertSame($message, SensitiveData::redactText($message));
     }
+
+    /**
+     * Each of these leaked a real credential through a single combined
+     * pattern, in a different way. They are kept as separate cases because a
+     * fix for one would not necessarily fix the others.
+     */
+    public function test_it_redacts_a_password_embedded_in_a_dsn(): void
+    {
+        // A connection error quotes the DSN. The password has no key name, so a
+        // key-based pattern cannot see it at all.
+        $redacted = SensitiveData::redactText(
+            'SQLSTATE[HY000] [1045] Access denied for user (using password: YES) in mysql://ops:hunter2@db.internal:3306/sender',
+        );
+
+        $this->assertStringNotContainsString('hunter2', $redacted);
+        $this->assertStringContainsString('[redacted]', $redacted);
+        // The host is not a secret and is what makes the message useful.
+        $this->assertStringContainsString('db.internal', $redacted);
+    }
+
+    public function test_it_redacts_a_bearer_token_in_full(): void
+    {
+        // The value contains a space, so a whitespace-delimited value stops at
+        // the scheme and leaves the token in the clear while looking redacted.
+        $redacted = SensitiveData::redactText('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def');
+
+        $this->assertStringNotContainsString('eyJhbGciOiJIUzI1NiJ9', $redacted);
+        $this->assertStringNotContainsString('abc.def', $redacted);
+        $this->assertSame(1, substr_count($redacted, SensitiveData::REDACTED));
+    }
+
+    public function test_it_redacts_a_basic_auth_token(): void
+    {
+        $redacted = SensitiveData::redactText('Authorization: Basic dXNlcjpwYXNzd29yZA==');
+
+        $this->assertStringNotContainsString('dXNlcjpwYXNzd29yZA', $redacted);
+    }
+
+    public function test_it_redacts_credentials_in_a_json_payload(): void
+    {
+        // The key carries its own quotes, so an unquoted key pattern cannot
+        // match it.
+        $redacted = SensitiveData::redactText('{"mail":{"password":"hunter2","host":"x"},"ok":true}');
+
+        $this->assertStringNotContainsString('hunter2', $redacted);
+        $this->assertStringContainsString('"host":"x"', $redacted);
+        $this->assertStringContainsString('"ok":true', $redacted);
+    }
+
+    public function test_free_text_redaction_is_idempotent(): void
+    {
+        // It runs over text that may already have been redacted.
+        $once = SensitiveData::redactText('password=hunter2 with Bearer eyJhbGciOi');
+
+        $this->assertSame($once, SensitiveData::redactText($once));
+    }
 }

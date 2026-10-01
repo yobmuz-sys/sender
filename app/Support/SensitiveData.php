@@ -53,6 +53,12 @@ final class SensitiveData
     }
 
     /**
+     * The credential-shaped words, kept as one fragment so the patterns below
+     * cannot drift apart from each other.
+     */
+    private const CREDENTIAL_WORDS = 'pass(?:word|wd)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|authorization';
+
+    /**
      * Redact credential-shaped substrings inside a free-text message.
      *
      * Key-based redaction is not sufficient for text. A failure message
@@ -61,16 +67,66 @@ final class SensitiveData
      * `message` gives the scanner nothing to match. Anything persisted beyond a
      * log line must therefore be scrubbed on content as well as on key.
      *
-     * Matches `key=value` and `key: value` where the key is credential-shaped,
-     * leaving surrounding prose intact so the message stays useful.
+     * Several shapes are handled separately rather than in one pattern, because
+     * the common ones each defeat a single regex in a different way:
+     *
+     *   - `password=hunter2`, `api_key: abc` — the ordinary case;
+     *   - `scheme://user:pass@host` — a DSN, where the password has no key at
+     *     all and appears very often in connection errors;
+     *   - `{"password":"hunter2"}` — JSON, where the key is quoted, so a
+     *     key-based pattern cannot see it;
+     *   - `Authorization: Bearer <jwt>` — a single token whose value contains
+     *     a space, so a `\S+` value stops at the wrong place and leaves the
+     *     secret in the clear while appearing to have redacted it. That partial
+     *     case is worse than no match at all, so it is handled on its own.
+     *
+     * Values are replaced, never just their first token, and the surrounding
+     * prose is preserved so the message stays useful.
+     *
+     * This is a best-effort scrub of shaped credentials, not proof of
+     * sanitisation: a secret embedded in plain prose ("my password is
+     * hunter2") has no distinguishing shape and is not detected.
      */
     public static function redactText(string $text): string
     {
-        // The replacement is a literal, not a pattern, so it is inserted
-        // verbatim; escaping it here would persist the backslashes.
+        $words = self::CREDENTIAL_WORDS;
+        $redacted = self::REDACTED;
+
+        // 1. Credentials in a URI. The password sits between the colon and the
+        //    at-sign, with no key name to match on.
+        $text = (string) preg_replace(
+            '/\b([a-z][a-z0-9+.-]*:\/\/[^\s:@\/]*:)([^\s@\/]*)@/i',
+            '$1'.$redacted.'@',
+            $text,
+        );
+
+        // 2. An auth scheme followed by a token. The value contains a space, so
+        //    it must be matched as a scheme plus token rather than as a
+        //    whitespace-delimited value, which would stop after the scheme and
+        //    leave the secret in the clear while appearing to have redacted it.
+        $text = (string) preg_replace(
+            '/\b(Bearer|Basic|Digest|Negotiate)\s+[A-Za-z0-9._\-\/+=]{4,}/i',
+            '$1 '.$redacted,
+            $text,
+        );
+
+        // 3. JSON, where the key carries its own quotes and so is invisible to
+        //    an unquoted key pattern.
+        $text = (string) preg_replace(
+            '/("([^"]*(?:'.$words.')[^"]*)"\s*:\s*)"(?:\\\\.|[^"\\\\])*"/i',
+            '$1"'.$redacted.'"',
+            $text,
+        );
+
+        // 4. The ordinary `key=value` / `key: value` case. Both quote styles
+        //    are consumed whole so a secret containing a space cannot survive.
+        //    The lookaheads keep this rule away from values rule 2 already
+        //    handled, so a redacted token is not rendered twice.
         return (string) preg_replace(
-            '/\b([A-Za-z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|authorization)[A-Za-z0-9_.-]*)(\s*[=:]\s*)("[^"]*"|\'[^\']*\'|[^\s,;)\]}]+)/i',
-            '$1$2'.self::REDACTED,
+            '/\b([A-Za-z0-9_.-]*(?:'.$words.')[A-Za-z0-9_.-]*)(\s*[=:]\s*)'
+                .'(?!(?:Bearer|Basic|Digest|Negotiate)\b)(?!\x5Bredacted\x5D)'
+                .'("[^"]*"|\'[^\']*\'|[^\s,;)\]}]+)/i',
+            '$1$2'.$redacted,
             $text,
         );
     }

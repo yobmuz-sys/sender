@@ -333,11 +333,23 @@ stages fail for different reasons and an operator needs to know which:
 | `configuration` | a mailer that actually delivers is configured |
 | `transport` | Laravel can build that transport from the configuration |
 | `connection` | host resolves, TCP connects, TLS negotiates where required |
+| `authentication` | the server rejected these credentials |
 | `acceptance` | the server accepted a message from these credentials |
 
 Verification stops at the first failing stage. Omitting `--to` proves the
 connection only and reports `DEGRADED`, because the credentials were never
 exercised — reporting `READY` there would overstate what was established.
+
+Symfony authenticates inside `start()`, so a rejected login and a refused
+socket arrive as the same exception. The failure is classified and reported
+against the stage that actually failed. Without that, the most common
+misconfiguration there is — a wrong password — would be reported as "could not
+connect" and send an operator to debug the network instead of the credential.
+
+A successful run emits no separate `authentication` stage. If a server
+advertises no mechanism there was nothing to accept, so claiming the stage would
+assert something that never happened; `acceptance` already covers credentials
+that were offered and taken.
 
 **The strongest available claim is server acceptance, not delivery.** Nothing
 inside the application can observe a recipient's mailbox. That boundary is
@@ -352,7 +364,10 @@ Two properties follow from running it as a command rather than inline:
 - **No request pays for network I/O.** The capability reads stored evidence, so
   a page view never opens a mail connection.
 - **It does not expire silently.** An old verification degrades rather than
-  being trusted forever, since configuration can change after it was taken.
+  being trusted forever, since configuration can change after it was taken. The
+  verified mailer is recorded alongside the result, so switching `MAIL_MAILER`
+  degrades the capability immediately instead of continuing to report `READY`
+  for a transport the installation no longer uses.
 
 Persisted failure text goes through `SensitiveData::redactText`. A run record
 and a verification record outlive the deployment that wrote them, and error text

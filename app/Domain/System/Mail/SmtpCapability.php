@@ -77,6 +77,22 @@ final class SmtpCapability
             'Re-run: php artisan sender:verify-smtp --to=you@example.com',
         ]));
 
+        if (! $verification->matchesCurrentConfiguration()) {
+            return CapabilityCheck::degraded(
+                'smtp transport',
+                sprintf(
+                    'verified against the %s mailer, but %s is configured now',
+                    $verification->mailer ?? 'previous',
+                    (string) config('mail.default'),
+                ),
+                array_merge($remedies, [
+                    'A verification records what was true when it ran; the configuration has changed since.',
+                    'Re-run the verification against the current configuration.',
+                ]),
+                $subject,
+            );
+        }
+
         if ($verification->status === CapabilityStatus::Ready && $age > $this->freshAfterSeconds()) {
             return CapabilityCheck::degraded(
                 'smtp transport',

@@ -57,6 +57,8 @@ class SmtpCapabilityTest extends TestCase
 
     public function test_verification_is_recorded_and_reported_by_the_capability(): void
     {
+        config()->set('mail.default', 'smtp');
+
         $capability = app(SmtpCapability::class);
 
         $capability->record(new SmtpVerification(
@@ -69,6 +71,7 @@ class SmtpCapabilityTest extends TestCase
             ],
             'The server accepted a test message. This does not prove recipient delivery.',
             now()->getTimestamp(),
+            mailer: 'smtp',
         ));
 
         $this->assertDatabaseHas('system_settings', ['key' => 'capability.smtp.verification']);
@@ -83,6 +86,8 @@ class SmtpCapabilityTest extends TestCase
 
     public function test_a_recorded_failure_reports_unavailable_with_its_reason(): void
     {
+        config()->set('mail.default', 'smtp');
+
         $capability = app(SmtpCapability::class);
 
         $capability->record(new SmtpVerification(
@@ -91,6 +96,7 @@ class SmtpCapabilityTest extends TestCase
             'Could not open a connection to the mail server.',
             now()->getTimestamp(),
             'connection refused by mail.example.com:587',
+            mailer: 'smtp',
         ));
 
         $check = $capability->check();
@@ -101,6 +107,8 @@ class SmtpCapabilityTest extends TestCase
 
     public function test_an_old_verification_degrades_rather_than_trusting_forever(): void
     {
+        config()->set('mail.default', 'smtp');
+
         $capability = app(SmtpCapability::class);
 
         config()->set('sender.capabilities.smtp.fresh_after_seconds', 3600);
@@ -110,6 +118,7 @@ class SmtpCapabilityTest extends TestCase
             [['name' => SmtpVerification::STAGE_ACCEPTANCE, 'passed' => true, 'detail' => 'accepted']],
             'verified',
             now()->subDay()->getTimestamp(),
+            mailer: 'smtp',
         ));
 
         $this->assertSame(CapabilityStatus::Degraded, $capability->check()->capability);
@@ -136,17 +145,62 @@ class SmtpCapabilityTest extends TestCase
 
     public function test_a_verified_smtp_capability_flows_into_the_registry(): void
     {
+        config()->set('mail.default', 'smtp');
+
         app(SmtpCapability::class)->record(new SmtpVerification(
             CapabilityStatus::Ready,
             [['name' => SmtpVerification::STAGE_ACCEPTANCE, 'passed' => true, 'detail' => 'accepted']],
             'verified',
             now()->getTimestamp(),
+            mailer: 'smtp',
         ));
 
         $this->assertSame(
             CapabilityStatus::Ready,
             app(CapabilityRegistry::class)->status(CapabilitySubject::Smtp),
         );
+    }
+
+    public function test_a_verification_does_not_survive_a_mailer_change(): void
+    {
+        $capability = app(SmtpCapability::class);
+
+        config()->set('mail.default', 'smtp');
+
+        $capability->record(new SmtpVerification(
+            CapabilityStatus::Ready,
+            [['name' => SmtpVerification::STAGE_ACCEPTANCE, 'passed' => true, 'detail' => 'accepted']],
+            'verified',
+            now()->getTimestamp(),
+            mailer: 'smtp',
+        ));
+
+        $this->assertSame(CapabilityStatus::Ready, $capability->check()->capability);
+
+        // Verification records what was true when it ran. Reporting READY
+        // after the transport changed would be the platform claiming to do
+        // something it is not.
+        config()->set('mail.default', 'log');
+
+        $check = $capability->check();
+
+        $this->assertSame(CapabilityStatus::Degraded, $check->capability);
+        $this->assertStringContainsString('smtp', $check->detail);
+        $this->assertStringContainsString('log', $check->detail);
+    }
+
+    public function test_a_verification_recorded_without_a_mailer_is_not_trusted(): void
+    {
+        $capability = app(SmtpCapability::class);
+
+        $capability->record(new SmtpVerification(
+            CapabilityStatus::Ready,
+            [],
+            'verified by an older release that did not record the mailer',
+            now()->getTimestamp(),
+        ));
+
+        $this->assertSame(CapabilityStatus::Degraded, $capability->check()->capability);
     }
 
     public function test_ordinary_requests_never_perform_smtp_verification(): void
@@ -171,10 +225,22 @@ class SmtpCapabilityTest extends TestCase
 
     public function test_composing_a_message_is_provable_independently_of_the_transport(): void
     {
-        // Composition is an application-level property and must not be conflated
-        // with SMTP availability. It works even when the transport discards mail.
+        // Composition is an application-level property and must not be
+        // conflated with SMTP availability. It works even when the transport
+        // discards mail, which is why it is asserted through the built
+        // message rather than inferred from the capability.
         Mail::raw('probe', static fn ($message) => $message->to('ops@example.com')->subject('probe'));
 
-        $this->assertTrue(true, 'Laravel composed and accepted the message without error');
+        $sent = Mail::mailer()->getSymfonyTransport()->messages();
+
+        $this->assertCount(1, $sent);
+
+        $recipients = array_map(
+            static fn ($address) => $address->getAddress(),
+            $sent[0]->getOriginalMessage()->getTo(),
+        );
+
+        $this->assertSame(['ops@example.com'], $recipients);
+        $this->assertSame('probe', $sent[0]->getOriginalMessage()->getSubject());
     }
 }

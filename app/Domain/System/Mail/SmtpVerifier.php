@@ -30,6 +30,16 @@ use Throwable;
  *
  * Acceptance is the strongest claim available from inside the application. It
  * is still not delivery: nothing here observes the recipient's mailbox.
+ *
+ * Symfony authenticates inside `start()`, so a rejected login and a refused
+ * socket both surface as the same exception. The failure is classified and
+ * reported against the stage that actually failed: an operator told "could not
+ * connect" when the real problem is a bad password would chase the wrong thing.
+ *
+ * A successful run does not emit a separate `authentication` stage. If the
+ * server advertises no authentication mechanism there was nothing to accept,
+ * so claiming the stage would be asserting something that never happened; the
+ * `acceptance` stage already covers credentials that were offered and taken.
  */
 final class SmtpVerifier
 {
@@ -63,6 +73,7 @@ final class SmtpVerifier
                 $stages,
                 "Mail is configured to use the '{$mailer}' mailer, which discards messages.",
                 'Set MAIL_MAILER to smtp (or sendmail) and provide MAIL_HOST and MAIL_PORT.',
+                $mailer,
             );
         }
 
@@ -79,27 +90,48 @@ final class SmtpVerifier
         } catch (Throwable $exception) {
             $stages[] = $this->stage(SmtpVerification::STAGE_TRANSPORT, false, $exception->getMessage());
 
-            return $this->fail($stages, 'The mail configuration is not valid.', $exception->getMessage());
+            return $this->fail($stages, 'The mail configuration is not valid.', $exception->getMessage(), $mailer);
         }
 
-        // Connect, and negotiate TLS where the scheme requires it.
+        // Connect, and negotiate TLS where the scheme requires it. The
+        // connection is deliberately left open afterwards: the transport reuses
+        // it for the test message, and stopping it here would force a second
+        // full round trip to a server that may rate-limit connections.
         try {
             $transport->start();
 
             $stages[] = $this->stage(SmtpVerification::STAGE_CONNECTION, true, 'host resolved, connected, and negotiated the configured scheme');
         } catch (Throwable $exception) {
+            // Symfony performs the login inside start(), so a rejected
+            // credential and an unreachable host arrive as the same exception.
+            // The socket demonstrably connected if we got as far as the login,
+            // and reporting it as a connection failure would send an operator
+            // looking at the wrong thing.
+            if ($this->looksLikeAuthenticationFailure($exception)) {
+                $stages[] = $this->stage(SmtpVerification::STAGE_CONNECTION, true, 'host resolved, connected, and negotiated the configured scheme');
+                $stages[] = $this->stage(SmtpVerification::STAGE_AUTHENTICATION, false, $exception->getMessage());
+
+                return $this->fail(
+                    $stages,
+                    'The mail server was reached, but rejected these credentials.',
+                    $exception->getMessage(),
+                    $mailer,
+                );
+            }
+
             $stages[] = $this->stage(SmtpVerification::STAGE_CONNECTION, false, $exception->getMessage());
 
             return $this->fail(
                 $stages,
                 'Could not open a connection to the mail server.',
                 $exception->getMessage(),
+                $mailer,
             );
-        } finally {
-            $transport->stop();
         }
 
         if ($recipient === null || $recipient === '') {
+            $transport->stop();
+
             // Honest partial result: everything up to the socket is proved, and
             // the credentials have not been exercised at all.
             return new SmtpVerification(
@@ -107,6 +139,7 @@ final class SmtpVerifier
                 $stages,
                 'Connection proved. Credentials were not exercised: no verification address was given.',
                 now()->getTimestamp(),
+                mailer: $mailer,
             );
         }
 
@@ -124,7 +157,11 @@ final class SmtpVerifier
                 $stages,
                 'The mail server was reached, but it rejected these credentials or the message.',
                 $exception->getMessage(),
+                $mailer,
             );
+        } finally {
+            // Released on both paths, so a verification never leaks a socket.
+            $transport->stop();
         }
 
         $stages[] = $this->stage(
@@ -134,7 +171,7 @@ final class SmtpVerifier
         );
 
         if (! $accepted) {
-            return $this->fail($stages, 'The mail server declined the test message.', null);
+            return $this->fail($stages, 'The mail server declined the test message.', null, $mailer);
         }
 
         return new SmtpVerification(
@@ -142,6 +179,25 @@ final class SmtpVerifier
             $stages,
             'The server accepted a test message. This does not prove recipient delivery.',
             now()->getTimestamp(),
+            mailer: $mailer,
+        );
+    }
+
+    /**
+     * Whether a transport failure happened after the socket was open, at the
+     * login, rather than before it.
+     *
+     * Matching on the message is a compromise: Symfony raises a single
+     * TransportException for both, and distinguishing them properly would mean
+     * reimplementing the handshake. The alternative is reporting every failure
+     * as "could not connect", which is wrong for the most common misconfiguration
+     * there is.
+     */
+    private function looksLikeAuthenticationFailure(Throwable $exception): bool
+    {
+        return (bool) preg_match(
+            '/authenticat|authenticator|\b535\b|credential|\b5\.7\.8\b/i',
+            $exception->getMessage(),
         );
     }
 
@@ -156,7 +212,7 @@ final class SmtpVerifier
     /**
      * @param  list<array{name: string, passed: bool, detail: string}>  $stages
      */
-    private function fail(array $stages, string $summary, ?string $error): SmtpVerification
+    private function fail(array $stages, string $summary, ?string $error, string $mailer): SmtpVerification
     {
         return new SmtpVerification(
             CapabilityStatus::Unavailable,
@@ -164,6 +220,7 @@ final class SmtpVerifier
             $summary,
             now()->getTimestamp(),
             $error === null ? null : SensitiveData::redactText($error),
+            $mailer,
         );
     }
 }

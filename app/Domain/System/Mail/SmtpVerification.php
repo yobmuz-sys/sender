@@ -27,6 +27,8 @@ final readonly class SmtpVerification
 
     public const STAGE_CONNECTION = 'connection';
 
+    public const STAGE_AUTHENTICATION = 'authentication';
+
     public const STAGE_ACCEPTANCE = 'acceptance';
 
     /**
@@ -38,7 +40,22 @@ final readonly class SmtpVerification
         public string $summary,
         public int $verifiedAt,
         public ?string $error = null,
+        public ?string $mailer = null,
     ) {}
+
+    /**
+     * Whether this verification was taken against the mailer currently
+     * configured.
+     *
+     * A verification records what was true when it ran. Changing `MAIL_MAILER`
+     * afterwards changes the answer, and reporting the old `READY` alongside the
+     * new configuration would be the platform claiming to do something it is
+     * not.
+     */
+    public function matchesCurrentConfiguration(): bool
+    {
+        return $this->mailer !== null && $this->mailer === (string) config('mail.default');
+    }
 
     /**
      * @return list<array{name: string, passed: bool, detail: string}>
@@ -70,6 +87,7 @@ final readonly class SmtpVerification
             'verified_at' => $this->verifiedAt,
             'error' => $this->error,
             'stages' => $this->stages,
+            'mailer' => $this->mailer,
             'proves' => 'the server accepted a message from these credentials',
             'does_not_prove' => 'that a recipient received it',
         ];
@@ -89,6 +107,7 @@ final readonly class SmtpVerification
             (string) ($data['summary'] ?? ''),
             (int) ($data['verified_at'] ?? 0),
             isset($data['error']) ? (string) $data['error'] : null,
+            isset($data['mailer']) ? (string) $data['mailer'] : null,
         );
     }
 }
