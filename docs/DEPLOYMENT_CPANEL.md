@@ -55,12 +55,15 @@ In cPanel -> MySQL Databases:
 
 ## 3. Upload the application
 
-Upload the repository contents so that `artisan`, `composer.json` and
-`composer.json` sit in the document root (or one level above, with the document
-root pointing at `public/`).
+Upload the repository into a directory outside the web-accessible document
+root, for example `~/sender`. Configure the domain's document root to point
+directly at `~/sender/public`.
 
-**The document root must point at `public/`.** Never expose the project root:
-`storage/`, `.env` and `vendor/` must not be web-reachable.
+**Only `public/` may be web-accessible.** Keep `artisan`, `composer.json`,
+`.env`, `storage/` and `vendor/` outside the document root. If the hosting
+provider cannot point the domain at the application's `public/` directory,
+do not expose the project root; use a hosting configuration that supports a
+separate document root.
 
 ### Installation
 
