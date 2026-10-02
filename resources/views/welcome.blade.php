@@ -17,18 +17,18 @@
             'icon' => 'check',
         ],
         [
-            'title' => 'Organise your contacts',
-            'body' => 'Keep the addresses you want to work with in lists, so a group can be reused instead of being rebuilt from an export every time.',
+            'title' => 'Review the results',
+            'body' => 'Open any extraction to see the addresses it found, how many there were, and where they came from. Download the addresses as a spreadsheet when you need them somewhere else.',
             'icon' => 'list',
         ],
         [
-            'title' => 'Connect your mail account',
-            'body' => 'Add the SMTP account you already send from. The connection, its encryption and its authentication are each verified, and the account can be tested with a single message before it is relied on.',
+            'title' => 'Connect and verify your mail account',
+            'body' => 'Add the SMTP account you already use. Its connection, its encryption and its authentication are each verified, and a single test message confirms the account really works before anything depends on it.',
             'icon' => 'mail',
         ],
         [
-            'title' => 'Check sending readiness',
-            'body' => 'A readiness summary covers sender authentication, domain configuration and your sending policy, so you can see whether your setup is sound before you depend on it.',
+            'title' => 'Check sender readiness',
+            'body' => 'A readiness summary covers sender authentication, domain configuration and your sending policy, so you can see whether your setup is sound. Preparing contact lists and campaign sending are the next steps, and are not part of the product yet.',
             'icon' => 'gauge',
         ],
     ];
@@ -46,22 +46,22 @@
         ],
         [
             'title' => 'Your own mail account',
-            'body' => 'You connect the mail account you already own. Passwords are stored encrypted and are never shown again after you save them.',
+            'body' => 'You add the SMTP account you already use, and Sender confirms it: the connection, its encryption, and its authentication. Passwords are stored encrypted and are never shown again after you save them.',
             'icon' => 'mail',
         ],
         [
-            'title' => 'Contact lists',
-            'body' => 'Group the contacts you want to keep and reuse them later, with the source and check result attached to each address.',
+            'title' => 'Results you can review',
+            'body' => 'Every extraction keeps a detail page listing what was found, with the source it came from. Runs that are still going can be stopped, and finished results can be downloaded as a spreadsheet.',
             'icon' => 'list',
         ],
         [
-            'title' => 'Controlled sending',
-            'body' => 'Sending is configured to progress in a measured way, with visible limits, rather than to fire everything at once and hope.',
-            'icon' => 'shield',
+            'title' => 'Predictable runs',
+            'body' => 'An extraction is bounded by the size of the content and by how much it holds at once, so one very large page cannot quietly take over a shared host.',
+            'icon' => 'limit',
         ],
         [
-            'title' => 'Sending readiness',
-            'body' => 'Sender authentication and domain configuration are reported so you can fix a weak setup. This describes configuration only — it does not promise inbox placement.',
+            'title' => 'Sender readiness',
+            'body' => 'Sender authentication and domain configuration are reported so you can fix a weak setup before you depend on it. This describes configuration only — it does not promise inbox placement.',
             'icon' => 'gauge',
         ],
     ];
@@ -69,14 +69,16 @@
     $honesty = [
         'Every result is traceable to a signal. An address is called clearly invalid only when objective checks support it.',
         'Uncertain stays uncertain. Nothing here turns an unknown result into a confident yes.',
-        'Clearly invalid addresses can be filtered out before you send anything.',
-        'You stay in control of your mail account, and credentials are never displayed after saving.',
-        'Consent and suppression records are treated as part of responsible sending, not as an afterthought.',
+        'What the checks can rule out is kept out of the later steps, before a message would ever be prepared.',
+        'You stay in control of your mail account. Credentials are never displayed after saving.',
+        'Consent and suppression records are part of responsible sending, and are part of the work still to come.',
         'Inbox placement is not guaranteed and not promised. Sender reports configuration; the receiving inbox decides.',
     ];
 
     $upcoming = [
+        ['title' => 'Contact lists', 'body' => 'Save the addresses you want to keep into reusable lists and segments.'],
         ['title' => 'Scheduled campaigns', 'body' => 'Compose, schedule and send a campaign from a saved list.'],
+        ['title' => 'Consent and suppression', 'body' => 'Keep honour, consent and opt-out records per contact and per address.'],
         ['title' => 'Delivery reporting', 'body' => 'Per-recipient delivery outcomes and a simple performance summary.'],
         ['title' => 'Bulk file uploads', 'body' => 'Import a spreadsheet instead of pasting content by hand.'],
         ['title' => 'Team workspaces', 'body' => 'Share lists and sending activity across an organisation.'],
@@ -88,7 +90,7 @@
         'list' => '<path d="M8.5 7h11M8.5 12h11M8.5 17h11"/><path d="M4.25 7h.01M4.25 12h.01M4.25 17h.01"/>',
         'mail' => '<rect x="2.75" y="5" width="18.5" height="14" rx="2.5"/><path d="m3.75 7.5 7.36 5.26a2 2 0 0 0 2.28 0l7.36-5.26"/>',
         'gauge' => '<path d="M4.5 18a8.5 8.5 0 1 1 15 0"/><path d="m12 14.5 3.5-3.5"/><circle cx="12" cy="18" r="1.25"/>',
-        'shield' => '<path d="M12 3.25 5 6v5.5c0 4 2.9 7.4 7 9.25 4.1-1.85 7-5.25 7-9.25V6l-7-2.75Z"/><path d="m9.25 12.25 2 2 3.5-3.75"/>',
+        'limit' => '<path d="M9.5 4.5h-3a2 2 0 0 0-2 2v3"/><path d="M14.5 4.5h3a2 2 0 0 1 2 2v3"/><path d="M19.5 14.5v3a2 2 0 0 1-2 2h-3"/><path d="M9.5 19.5h-3a2 2 0 0 1-2-2v-3"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
     ];
 @endphp
 
@@ -107,9 +109,9 @@
                 </h1>
 
                 <p class="mt-5 text-base leading-7 text-slate-600 sm:text-lg sm:leading-8">
-                    Collect email addresses from text or a public web page, check them with
-                    evidence-based checks, keep the usable ones in lists, and connect your own
-                    mail account — with the state of every step visible to you while it runs.
+                    Collect email addresses from text or a public web page, review exactly what
+                    was found, then connect and verify your own mail account — with the state of
+                    every step visible to you while it runs.
                 </p>
 
                 <div class="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -140,7 +142,7 @@
 
             <ul class="mt-12 grid gap-4 sm:grid-cols-3">
                 @foreach ([
-                    ['title' => 'Your mail, your account', 'body' => 'Sending happens through the mail account you already own.'],
+                    ['title' => 'Your mail, your account', 'body' => 'You add the SMTP account you already use, and its connection is verified before anything depends on it.'],
                     ['title' => 'Honest results', 'body' => 'Unknown is reported as unknown instead of being rounded up to valid.'],
                     ['title' => 'No delivery promises', 'body' => 'Sender reports configuration. Inbox placement is never guaranteed.'],
                 ] as $point)

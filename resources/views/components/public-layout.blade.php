@@ -28,7 +28,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Extract email addresses from text and public web pages, check them with evidence-based checks, keep them organised in lists, and send through your own SMTP account.">
+    <meta name="description" content="Extract email addresses from text and public web pages, review exactly what was found, and connect and verify your own SMTP account before preparing to send.">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
     <title>{{ $title ? $title.' · ' : '' }}{{ $brand }}</title>
@@ -117,8 +117,8 @@
                     {{ $brand }}
                 </p>
                 <p class="mt-3 max-w-md text-sm leading-6 text-slate-600">
-                    A workspace for collecting email addresses, checking them with evidence-based
-                    checks, organising them into lists, and sending through your own mail account.
+                    A workspace for collecting email addresses, reviewing exactly what was
+                    found, and connecting and verifying the mail account you already use.
                 </p>
             </div>
 
