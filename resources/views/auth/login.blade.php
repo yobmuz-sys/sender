@@ -86,7 +86,8 @@
                            class="block min-h-12 w-full rounded-lg border bg-white py-2.5 pl-3 pr-12 text-base text-slate-900 shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1
                                   {{ $passwordErrors->isNotEmpty() ? 'border-rose-400 focus:border-rose-500 focus-visible:ring-rose-500' : 'border-slate-300 focus:border-indigo-500 focus-visible:ring-indigo-500' }}">
 
-                    <button type="button" id="password-toggle" aria-controls="password" aria-pressed="false"
+                    <button type="button" data-password-toggle aria-controls="password" aria-pressed="false"
+                            data-show-label="Show password" data-hide-label="Hide password"
                             class="absolute inset-y-0 right-0 flex w-12 items-center justify-center rounded-r-lg text-slate-500 transition hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500">
                         <span data-password-label class="sr-only">Show password</span>
                         <svg data-password-icon="show" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -129,41 +130,4 @@
             </a>
         </div>
     </div>
-
-    <script>
-        /*
-         * Password visibility, written as a progressive enhancement: with scripting
-         * unavailable the field is still a password field and the form still works,
-         * so nothing here is allowed to be required for the page to be usable.
-         */
-        (function () {
-            var input = document.getElementById('password');
-            var toggle = document.getElementById('password-toggle');
-
-            if (!input || !toggle) {
-                return;
-            }
-
-            toggle.addEventListener('click', function () {
-                var reveal = input.type === 'password';
-
-                input.type = reveal ? 'text' : 'password';
-                toggle.setAttribute('aria-pressed', reveal ? 'true' : 'false');
-                toggle.querySelector('[data-password-label]').textContent = reveal ? 'Hide password' : 'Show password';
-                toggle.querySelector('[data-password-icon="show"]').classList.toggle('hidden', reveal);
-                toggle.querySelector('[data-password-icon="hide"]').classList.toggle('hidden', !reveal);
-
-                // Keep the caret where it was rather than jumping to the start.
-                var end = input.value.length;
-
-                input.focus();
-
-                try {
-                    input.setSelectionRange(end, end);
-                } catch (error) {
-                    // Some input types refuse selection APIs; focus alone is enough.
-                }
-            });
-        })();
-    </script>
 </x-auth-layout>

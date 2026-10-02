@@ -77,23 +77,27 @@
                 </div>
 
                 <ul class="mt-10 space-y-4">
-                    @foreach ([
-                        'Extract addresses from text or a single public page, and see what each run found.',
-                        'Read check outcomes honestly, including the ones that stay uncertain.',
-                        'Connect the SMTP account you already use and verify it before anything depends on it.',
-                    ] as $point)
-                        <li class="flex gap-3 text-sm leading-6 text-slate-300">
-                            <svg class="mt-1 h-4 w-4 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <path d="m5 12.5 4.5 4.5L19 7.5"/>
-                            </svg>
-                            {{ $point }}
-                        </li>
-                    @endforeach
+                    @slot('aside')
+                        @foreach ([
+                            'Extract addresses from text or a single public page, and see what each run found.',
+                            'Read check outcomes honestly, including the ones that stay uncertain.',
+                            'Connect the SMTP account you already use and verify it before anything depends on it.',
+                        ] as $point)
+                            <li class="flex gap-3 text-sm leading-6 text-slate-300">
+                                <svg class="mt-1 h-4 w-4 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="m5 12.5 4.5 4.5L19 7.5"/>
+                                </svg>
+                                {{ $point }}
+                            </li>
+                        @endforeach
+                    @endslot
                 </ul>
 
-                <p class="mt-10 text-xs leading-5 text-slate-400">
-                    Contact lists and campaign sending are still being built.
-                </p>
+                @slot('aside-note')
+                    <p class="mt-10 text-xs leading-5 text-slate-400">
+                        Contact lists and campaign sending are still being built.
+                    </p>
+                @endslot
             </aside>
 
             <div class="px-5 py-8 sm:px-10 sm:py-12">
@@ -114,5 +118,61 @@
         </div>
     </footer>
 </div>
+
+<script>
+    /*
+     * Password visibility, written as a progressive enhancement and shared by
+     * every authentication page: with scripting unavailable the fields are still
+     * password fields and the forms still submit, so nothing here may be
+     * required for the page to be usable.
+     *
+     * Each toggle carries its own labels, because two toggles both called "Show
+     * password" tell a screen reader nothing about which field they belong to.
+     */
+    (function () {
+        var toggles = document.querySelectorAll('[data-password-toggle]');
+
+        toggles.forEach(function (toggle) {
+            var input = document.getElementById(toggle.getAttribute('aria-controls'));
+
+            if (!input) {
+                return;
+            }
+
+            var label = toggle.querySelector('[data-password-label]');
+            var revealIcon = toggle.querySelector('[data-password-icon="show"]');
+            var hideIcon = toggle.querySelector('[data-password-icon="hide"]');
+
+            toggle.addEventListener('click', function () {
+                var reveal = input.type === 'password';
+
+                input.type = reveal ? 'text' : 'password';
+                toggle.setAttribute('aria-pressed', reveal ? 'true' : 'false');
+
+                if (label) {
+                    label.textContent = reveal
+                        ? toggle.getAttribute('data-hide-label')
+                        : toggle.getAttribute('data-show-label');
+                }
+
+                if (revealIcon && hideIcon) {
+                    revealIcon.classList.toggle('hidden', reveal);
+                    hideIcon.classList.toggle('hidden', !reveal);
+                }
+
+                // Keep the caret where it was rather than jumping to the start.
+                var end = input.value.length;
+
+                input.focus();
+
+                try {
+                    input.setSelectionRange(end, end);
+                } catch (error) {
+                    // Some input types refuse selection APIs; focus alone is enough.
+                }
+            });
+        });
+    })();
+</script>
 </body>
 </html>
