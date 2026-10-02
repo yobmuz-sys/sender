@@ -116,5 +116,6 @@
         </div>
     </footer>
 </div>
+<x-password-toggle-script />
 </body>
 </html>
