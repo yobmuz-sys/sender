@@ -16,4 +16,3 @@
 @else
     <button type="{{ $type ?? 'submit' }}" {{ $attributes->class($class) }}>{{ $slot }}</button>
 @endif
-@end

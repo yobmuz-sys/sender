@@ -7,4 +7,3 @@
         <p class="mt-1 text-xs text-slate-500">{{ $hint }}</p>
     @endisset
 </div>
-@end

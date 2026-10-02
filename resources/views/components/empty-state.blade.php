@@ -6,4 +6,3 @@
         <p class="mx-auto mt-1 max-w-xl text-sm text-slate-600">{{ $description }}</p>
     @endisset
 </div>
-@end

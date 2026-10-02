@@ -14,4 +14,3 @@
 
     <div class="{{ $title ? 'mt-1' : '' }}">{{ $slot }}</div>
 </div>
-@end

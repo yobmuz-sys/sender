@@ -41,8 +41,8 @@
                     <span class="sr-only">Open navigation</span>
                 </summary>
 
-                <div class="absolute left-0 z-40 mt-2 max-h-[calc(100vh-6rem)] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-                    <x-app-nav :navigation="$nav" :pending-routes="$pending" />
+                <div class="absolute left-0 z-40 mt-2 max-h-[calc(100vh_-_5rem)] w-[min(20rem,calc(100vw_-_2rem))] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                    <x-app-nav :navigation="$nav" :pending-routes="$pending" aria-label="Mobile" />
                 </div>
             </details>
 

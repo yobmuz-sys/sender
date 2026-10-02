@@ -50,11 +50,29 @@ final readonly class NavigationItem
 
     /**
      * Whether this item should be marked active for the current URL.
+     *
+     * Callers hold the current request as a path and an entry's destination as a
+     * generated URL, so both sides are reduced to a bare path before comparison:
+     * compared as they arrive, `admin/users` never matches
+     * `http://host/admin/users` and no link is ever marked as the current page.
      */
     public function isActive(string $path, string $prefix): bool
     {
+        $path = self::toPath($path);
+        $prefix = self::toPath($prefix);
+
         return $this->matchPrefix
             ? str_starts_with($path, $prefix)
             : $path === $prefix;
+    }
+
+    /**
+     * Reduce a URL or a path to a comparable path.
+     */
+    private static function toPath(string $value): string
+    {
+        $path = parse_url($value, PHP_URL_PATH);
+
+        return trim($path === null || $path === false ? $value : $path, '/');
     }
 }
