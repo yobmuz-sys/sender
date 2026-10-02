@@ -174,6 +174,50 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Campaign sending policy
+    |---------------------------------------------------------------------------
+    |
+    | Stage 5C implements this; Stage 5A only fixes the defaults and the shape.
+    |
+    | The interval below is *this application's* conservative safety default for
+    | an ordinary shared-hosting transport. It is not a Gmail requirement, not a
+    | Yahoo requirement, and not derived from any provider's published figure —
+    | there is no universal "best interval", because provider limits and
+    | reputation vary. It exists so that a misconfigured transport cannot dump a
+    | whole audience into a provider at once, and it must never be used as a way
+    | of presenting a slowly ramped volume as something it is not.
+    |
+    | A provider's own limit always wins: when it is stricter than the default,
+    | the provider's applies. Slowing is safe; exceeding a limit is not.
+    |
+    */
+    'sending' => [
+        'minimum_interval_seconds' => (int) env('SENDER_SENDING_MINIMUM_INTERVAL_SECONDS', 30),
+
+        // Hard ceiling per invocation, so one campaign cannot hold the worker
+        // open indefinitely. A worker processes many campaigns; this bounds one.
+        'max_per_run' => (int) env('SENDER_SENDING_MAX_PER_RUN', 100),
+
+        /*
+        | Observed complaint rate thresholds, as WARN and BLOCK-READINESS bands.
+        |
+        | These are application policy readings, not a spam score. Nothing here
+        | computes a universal reputation figure: complaint rates are observed
+        | from provider feedback loops, which do not exist yet, so there is
+        | deliberately no "spam score" to misread these as one.
+        |
+        | Once bounce and complaint processing lands, a rate above the warning
+        | threshold is surfaced as a warning and above the block threshold it
+        | pauses the affected traffic. Until then they are inert.
+        */
+        'complaint_rate' => [
+            'warn_above' => (float) env('SENDER_COMPLAINT_WARN_ABOVE', 0.001),
+            'block_above' => (float) env('SENDER_COMPLAINT_BLOCK_ABOVE', 0.003),
+        ],
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
     | Outbound URL fetching
     |---------------------------------------------------------------------------
     |

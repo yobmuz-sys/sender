@@ -131,7 +131,78 @@ final class DeliveryReadiness
             ),
         );
 
+        $findings[] = $this->reverseDnsFinding($account, $transport);
+
         return $findings;
+    }
+
+    /**
+     * Forward-confirmed reverse DNS for the observed endpoint.
+     *
+     * The distinction that matters: when the transport is a third-party relay —
+     * every Gmail and Workspace account, and most bulk providers — the endpoint
+     * address is *definitively not* the sending infrastructure. The recipient's
+     * mail server sees Google's own outbound addresses, not this one.
+     *
+     * So for a relay this is `Unknown`, and reporting a warning would be
+     * inventing a deliverability problem on the customer's behalf. For a relay
+     * the customer runs themselves, the observation is worth making, because
+     * providers do require forward-confirmed reverse DNS of a sender's own
+     * infrastructure.
+     */
+    private function reverseDnsFinding(SmtpAccount $account, SmtpTransportDefinition $transport): ReadinessFinding
+    {
+        $isThirdPartyRelay = $account->provider->isThirdPartyRelay();
+
+        if ($isThirdPartyRelay) {
+            return ReadinessFinding::unknown(
+                'Reverse DNS for the sending address',
+                sprintf(
+                    'The connection is made to %s, but messages are submitted onward by the provider\'s own '
+                        .'outbound infrastructure. The reverse DNS of the sending address therefore cannot be '
+                        .'observed from here, and is the provider\'s to publish.',
+                    $account->host,
+                ),
+            );
+        }
+
+        // Resolving a tenant-chosen host to observe its DNS is the same kind of
+        // look-up the endpoint policy already performs for reachability. A name
+        // that does not resolve yields no finding rather than a failure.
+        $address = $this->observedAddress($transport->host);
+
+        if ($address === null) {
+            return ReadinessFinding::unknown(
+                'Reverse DNS for the sending address',
+                'The address of the sending host could not be resolved, so no reverse DNS observation was possible.',
+            );
+        }
+
+        return $this->dns->forwardConfirmed($address)
+            ? ReadinessFinding::pass(
+                'Reverse DNS for the sending address',
+                sprintf('The address %s publishes a PTR that resolves back to itself.', $address),
+            )
+            : ReadinessFinding::warn(
+                'Reverse DNS for the sending address',
+                sprintf(
+                    'The address %s does not publish a forward-confirmed reverse DNS name. Mail providers require '
+                        .'this of a sender\'s own infrastructure, so it is usually corrected at the host.',
+                    $address,
+                ),
+            );
+    }
+
+    /**
+     * The address a host currently resolves to, or null.
+     */
+    private function observedAddress(string $host): ?string
+    {
+        $address = filter_var($host, FILTER_VALIDATE_IP) !== false ? $host : @gethostbyname($host);
+
+        return ($address === false || $address === '' || $address === $host)
+            ? null
+            : $address;
     }
 
     /**

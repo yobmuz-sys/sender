@@ -31,7 +31,7 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 **Stage 3A-3E complete. Two source types run in production; a general-purpose job
 engine still does not exist.**
 
-Previous accepted baseline: `5e57606`. This release (Stage 5A) passes 468 tests / 1365 assertions.
+Stage 5A complete. 482 tests / 1400 assertions passing. Previous accepted baseline: `a3e4be4`.
 
 ## The next objective: mail, not more extraction
 

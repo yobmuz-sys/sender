@@ -74,6 +74,28 @@ enum SmtpProvider: string
     }
 
     /**
+     * Whether this is a hosted relay the customer does not operate.
+     *
+     * Load-bearing for two separate findings:
+     *
+     *  - Reverse DNS of the observed endpoint says nothing about the sending
+     *    infrastructure, because the provider submits onward from addresses the
+     *    customer never sees.
+     *  - Deliverability preflight findings against the *provider* are about the
+     *    provider, not the customer's own setup.
+     *
+     * A custom host is assumed to be the customer's own until proven otherwise,
+     * because refusing to check a tenant's own infrastructure would leave the one
+     * case they can actually fix unexamined.
+     */
+    public function isThirdPartyRelay(): bool
+    {
+        return $this === self::Gmail
+            || $this === self::GoogleWorkspace
+            || $this === self::CPanel;
+    }
+
+    /**
      * Guidance shown beside the form.
      *
      * The Gmail text says what Google's documentation says, and says plainly

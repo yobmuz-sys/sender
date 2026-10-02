@@ -171,6 +171,45 @@ class DomainAuthenticationEvidence
     }
 
     /**
+     * The reverse DNS name published for an address, or null.
+     *
+     * `gethostbyaddr()` returns the address unchanged when no PTR record exists,
+     * so an unchanged result is reported as absent rather than as a name that
+     * happens to look like an address.
+     */
+    public function reverseName(string $address): ?string
+    {
+        $name = @gethostbyaddr($address);
+
+        if ($name === false || $name === '' || $name === $address) {
+            return null;
+        }
+
+        return $name;
+    }
+
+    /**
+     * Whether an address publishes a PTR that resolves back to itself.
+     *
+     * Forward-confirmed reverse DNS is the check providers require of a sender's
+     * own infrastructure. Whether it holds for a *relay* tells us something about
+     * the relay, not about the sender — see {@see DeliveryReadiness}, which is
+     * why the result is an observation rather than a verdict.
+     */
+    public function forwardConfirmed(string $address): bool
+    {
+        $name = $this->reverseName($address);
+
+        if ($name === null) {
+            return false;
+        }
+
+        $forward = @gethostbyname($name);
+
+        return $forward !== $name && $forward === $address;
+    }
+
+    /**
      * @return list<string>
      */
     private function txtRecords(string $name): array

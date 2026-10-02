@@ -962,3 +962,33 @@ things now: it is outcome-aware, so a 4xx throttle leads to backing off rather
 than switching transports, and `RateDecision::pause()` exists as a first-class
 result, so the honest response to repeated rejection is to stop and let a person
 choose a different relay.
+
+### Reverse DNS belongs to the sending infrastructure
+
+Providers require forward-confirmed reverse DNS of a *sender's own*
+infrastructure. For Gmail, Workspace or cPanel the observed endpoint address is
+definitively not that infrastructure — the provider submits onward from addresses
+the customer never sees — so the finding is `UNKNOWN` with that stated. A warning
+there would invent a deliverability problem the customer has no way to fix.
+
+For a custom host the customer operates, the observation is made and warned on
+when absent, because that is the one case they can actually correct. A host that
+does not resolve yields no finding rather than a failure.
+
+### The interval is an application floor, not a provider rule
+
+`minimum_interval_seconds` is 30 by default. It bounds how fast an ordinary
+shared-hosting transport can submit, so a misconfigured campaign cannot deliver
+its whole audience to a provider at once. It is not a Gmail or Yahoo figure, and
+no provider publishes a universal best interval — so the configuration comment
+says so, because a future reader who assumed otherwise would treat it as a
+requirement to enforce rather than a floor to respect. A provider's stricter
+limit always wins.
+
+### The message contract
+
+`CampaignMessage` is a value object with no table, because no stage-5A consumer
+requires persistence. It fixes two decisions that are cheap now and expensive to
+change later: plain text is *derived* when only HTML is given (offered for
+review, not silently sent), and `parts()` decides the MIME structure once. It
+takes no free-text From address — the sender comes from `SenderIdentityPolicy`.

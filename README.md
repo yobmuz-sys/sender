@@ -19,7 +19,7 @@ long-running daemons and root access are **not** required at any point.
 > `sender:verify-url` actually measures it. Multi-URL extraction, file upload,
 > other document formats and SMTP campaign sending remain future work.
 
-Previous accepted baseline: `5e57606`. This release (Stage 5A) passes 468 tests / 1365 assertions.
+Stage 5A complete. 482 tests / 1400 assertions passing. Previous accepted baseline: `a3e4be4`.
 
 Implemented and tested:
 
@@ -185,6 +185,35 @@ selector is reported that way: the final message is signed by your provider with
 a selector this platform is not told, so any record found by searching would be a
 guess, and a guessed pass is worse than an admitted gap. Same for authentication
 alignment — only the outgoing message's headers can show it.
+
+**Two questions are kept apart.** *SMTP verified* asks whether the account
+connects, authenticates and submits. *Sending ready* asks whether the configured
+sender meets the minimum sending policy. A transport can be fully reachable while
+sending readiness is blocked — an unencrypted transport is exactly that case, and
+the tests assert reachability and eligibility stay separate answers.
+
+**Reverse DNS is reported per infrastructure, not per endpoint.** For Gmail,
+Workspace and cPanel — any relay the customer does not operate — the observed
+endpoint address is definitively *not* the sending infrastructure, so no reverse
+DNS finding is made. Reporting a warning there would invent a deliverability
+problem the customer cannot fix. For a custom host the customer runs, forward-
+confirmed reverse DNS is checked and warned on when absent.
+
+### Sending policy defaults
+
+`sender.sending.minimum_interval_seconds` defaults to **30 seconds** between
+recipients.
+
+This is *this application's* conservative floor for ordinary shared hosting. It
+is not a Gmail requirement, not a Yahoo requirement, and not derived from any
+provider's published figure — there is no universal "best interval". It exists so
+a misconfigured transport cannot dump a whole audience into a provider at once.
+A provider's stricter limit always wins.
+
+Observed complaint rates are read as bands, not as a score: above
+`sender.sending.complaint_rate.warn_above` (0.1%) a warning, above
+`block_above` (0.3%) sending is paused. They are inert until bounce and complaint
+feedback exists, because there is currently no complaint data to read.
 
 ### What this cannot do
 
@@ -530,3 +559,22 @@ Never commit `.env`, database credentials, SMTP passwords, API keys or private
 certificates. `.env` and the local SQLite files are already ignored by Git.
 Report a vulnerability privately to the maintainer rather than in a public
 issue.
+
+### The message contract
+
+`CampaignMessage` is a value object with no table behind it — Stage 5C owns
+sending, and Stage 5A fixes only the shape. Two decisions live in it because
+they are the ones most often taken wrongly later and are invisible until
+messages reach mailboxes:
+
+- **Plain text is derived, not optional by luck.** HTML-only input produces a
+  text part automatically, which the sender may then review and edit. Marketing
+  mail sent as HTML with no alternative is a deliverability handicap, and a
+  cosmetic one a caller would never notice was being taken.
+- **`parts()` decides the MIME structure once.** `multipart/alternative` whenever
+  both bodies exist, so the structure is stated rather than rediscovered at send
+  time.
+
+It does not allow a free-text From address: the sender is constrained by
+`SenderIdentityPolicy`, so a composed message cannot be built with a From its
+transport never authenticated as.
