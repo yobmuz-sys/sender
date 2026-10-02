@@ -24,9 +24,11 @@ final class ProductNavigation
         return [
             new NavigationItem('Dashboard', 'dashboard'),
             new NavigationItem('Extractor', 'extractor.index', matchPrefix: true),
-            // Real pages, unlike the shells below: a tenant's SMTP transports
-            // and what can be established about them already work.
-            new NavigationItem('Mail transports', 'account.smtp.index', matchPrefix: true),
+            // Real pages, unlike the shells below: a tenant's mail accounts and
+            // what can be established about them already work. Labelled the way
+            // the customer page labels itself, so the two never disagree about
+            // what this section is called.
+            new NavigationItem('Mail accounts', 'account.smtp.index', matchPrefix: true),
             new NavigationItem('Sending health', 'account.deliverability.index'),
             new NavigationItem('Files', 'files.index', matchPrefix: true),
             // Real as of Stage 5B. A list holds canonical contacts rather than

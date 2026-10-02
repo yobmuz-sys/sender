@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Domain\Users\Enums\Role;
 use App\Models\User;
+use App\Support\Navigation\ProductNavigation;
 use Tests\TestCase;
 
 /**
@@ -251,6 +252,39 @@ class AuthenticatedShellTest extends TestCase
     }
 
     /**
+     * The navigation and the pages it points at are read by the same person, so
+     * they are not allowed to disagree about what a section is called.
+     */
+    public function test_the_mail_section_is_named_the_way_its_page_is(): void
+    {
+        // Which entry carries the label is a data question, so it is asked of the
+        // data: the customer section still points at the same route under the name
+        // the customer page uses.
+        $mailEntry = collect(ProductNavigation::items())
+            ->first(fn ($item): bool => $item->route === 'account.smtp.index');
+
+        $this->assertNotNull($mailEntry, 'the customer mail section must remain in the navigation');
+        $this->assertSame('Mail accounts', $mailEntry->label);
+        $this->assertTrue($mailEntry->matchPrefix, 'the section still covers the pages beneath it');
+
+        // And the same section is rendered under that name everywhere it appears.
+        $content = (string) $this->actingAs(User::factory()->create())
+            ->get('/dashboard')
+            ->assertOk()
+            ->getContent();
+
+        $navigations = $this->navigationsOf($content);
+
+        $this->assertCount(2, $navigations, 'the desktop sidebar and the mobile panel');
+
+        foreach ($navigations as $navigation) {
+            $this->assertStringContainsString('Mail accounts', $navigation);
+            $this->assertStringNotContainsString('Mail transports', $navigation);
+            $this->assertStringContainsString('href="'.route('account.smtp.index').'"', $navigation);
+        }
+    }
+
+    /**
      * The navigation as rendered, without the page it wraps.
      */
     private function navigationOf(string $content): string
@@ -258,5 +292,17 @@ class AuthenticatedShellTest extends TestCase
         preg_match('/<nav\b[^>]*aria-label="Main"[^>]*>(.*?)<\/nav>/s', $content, $matches);
 
         return $matches[1] ?? '';
+    }
+
+    /**
+     * Every rendered navigation surface, sidebar and mobile panel alike.
+     *
+     * @return list<string>
+     */
+    private function navigationsOf(string $content): array
+    {
+        preg_match_all('/<nav\b[^>]*aria-label="(?:Main|Mobile)"[^>]*>(.*?)<\/nav>/s', $content, $matches);
+
+        return $matches[1];
     }
 }
