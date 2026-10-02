@@ -38,7 +38,7 @@ class SmtpCapabilityTest extends TestCase
     public function test_a_non_delivering_mailer_verifies_as_unavailable(): void
     {
         // The suite runs with the array mailer, which discards everything.
-        $verification = app(SmtpVerifier::class)->verify('ops@example.com');
+        $verification = app(SmtpVerifier::class)->verifyPlatform('ops@example.com');
 
         $this->assertSame(CapabilityStatus::Unavailable, $verification->status);
         $this->assertFalse($verification->proved(SmtpVerification::STAGE_CONFIGURATION));
@@ -49,7 +49,7 @@ class SmtpCapabilityTest extends TestCase
     {
         // Nothing should be dialled when the configuration already proves the
         // mailer cannot deliver.
-        $verification = app(SmtpVerifier::class)->verify('ops@example.com');
+        $verification = app(SmtpVerifier::class)->verifyPlatform('ops@example.com');
 
         $this->assertFalse($verification->proved(SmtpVerification::STAGE_CONNECTION));
         $this->assertFalse($verification->proved(SmtpVerification::STAGE_TRANSPORT));

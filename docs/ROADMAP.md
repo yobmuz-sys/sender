@@ -7,7 +7,15 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
-> **Stage 3E — secure single-URL extraction**
+> **Stage 5A — mail transport, sender identity and deliverability foundation**
+> Tenants and administrators can each configure SMTP transports; credentials are
+> encrypted at rest and never rendered back; the From address is bound to the
+> authenticated username; transports are built per account rather than by mutating
+> global mail configuration; SMTP hosts are subject to the same global-routability
+> policy as submitted URLs; and `DeliveryReadiness` reports PASS/WARN/BLOCK/
+> UNKNOWN evidence rather than a score. No campaign sends mail yet.
+>
+> **Stage 3E** delivered secure single-URL extraction:
 > Pasted text and one URL per extraction, both on the bounded `sender:work`
 > worker. URL fetching is treated as a network-security workload, not a form
 > field: scheme, port, DNS and global-routability checks, pinning against DNS
@@ -23,7 +31,39 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 **Stage 3A-3E complete. Two source types run in production; a general-purpose job
 engine still does not exist.**
 
-Accepted baseline: `d2e56eb`. 304 tests / 848 assertions passing.
+Previous accepted baseline: `5e57606`. This release (Stage 5A) passes 468 tests / 1365 assertions.
+
+## The next objective: mail, not more extraction
+
+Multi-URL extraction was the previous proposed next stage. It is **deferred**.
+The product objective is a multi-tenant sending platform, so the binding
+constraint is no longer how much text can be extracted — it is whether the
+platform has somewhere legitimate to send from. Every further extraction format
+depends on a transport that does not exist per tenant yet.
+
+```text
+5A  SMTP transport + per-user/admin assignment + deliverability preflight   NEXT
+      ↓
+5B  Sender identity, recipients, lists, consent, suppression, unsubscribe
+      ↓
+5C  Campaign engine, bounded queue, rate control, preflight, delivery state
+      ↓
+5D  Bounce and complaint feedback, provider adapters, sending analytics
+      ↓
+4F  Remaining extraction formats (upload, XLSX, DOCX, PDF, XML)
+      ↓
+3F  Multi-URL extraction, revisited when its shape is actually needed
+```
+
+Two boundaries hold for all of it:
+
+- **Platform mail and user mail stay separate.** The installation's SMTP is for
+  password resets, address confirmation and system notifications. A tenant's
+  campaign transport must never become the application's transactional mailer.
+  `SmtpCapability` continues to answer only the first question.
+- **Deliverability practice, not inbox placement.** No feature here promises
+  delivery, repairs an IP reputation, rotates transports to evade a provider's
+  block, or bypasses a sending limit. See `ARCHITECTURE.md` for the reasoning.
 
 The known limitations recorded in `README.md` (a `DEGRADED` developer machine, an
 empty `SENDER_REQUIRED_CAPABILITIES`, no production entitlement consumer, an
@@ -107,16 +147,20 @@ limits and administration around code that already existed.
 
 ## Explicitly not built yet
 
-The email extractor, the web crawler, SMTP campaign delivery, recipients and
-suppression, unsubscribes, the job engine, plans, entitlements, usage tracking,
-the admin operations centre, the REST API, PHP integration, billing, analytics,
-Redis, WebSockets and background daemons.
+Recipients, lists, consent, suppression, unsubscribes, bounce and complaint
+feedback, rate-control implementation, campaigns and bulk sending, analytics,
+open and click tracking, multi-URL extraction, file upload, the job engine,
+plans, entitlements, usage tracking, the REST API, PHP integration and billing.
 
 None of these should be started before the stage that establishes the
 foundation they depend on. Note that Stage 2 built the *vocabulary* for
 entitlements and subsystem control, not the features that use them: nothing
 grants a plan, and no feature depends on a capability that has not been
 measured.
+
+Stage 5A is the clearest case of that rule. It built transports, identity and
+readiness — and stopped. A campaign engine needs consent and suppression to be
+meaningful, and a rate controller needs a real delivery outcome to react to.
 
 ---
 
@@ -404,9 +448,65 @@ job is a Stage 3F decision, deliberately not pre-empted here.
 and DNS validation of extracted addresses, SMTP campaign delivery, recipients,
 suppression, billing and the REST API.
 
-## Next: Stage 3F — multi-URL workload architecture
+## Deferred: Stage 3F — multi-URL workload architecture
 
 The open question is shape, not code: does one extraction with many URLs become
 many bounded jobs, or one job per extraction? The single-URL slice supplies the
 measurements that decide it — per-fetch time, retry rates, and how much of the
 worker's runtime a single page consumes.
+
+That work is **deferred behind Stage 5A–5D**. Nothing in the mail product
+depends on it, and the extraction platform is stable enough to leave alone.
+---
+
+## What Stage 5A delivered
+
+### One transport, two owners
+
+`smtp_accounts` holds a tenant-owned transport and an operator-assigned one, and
+the two differ only in `management_mode`. A tenant can hold several; nothing tries
+them in turn, and there is no automatic failover or rotation.
+
+Assignment **moves** the row rather than copying it, so one encrypted credential
+never exists in two rows that could be verified and disabled independently.
+
+### The credential is a type
+
+Encrypted in an Eloquent cast, returned as an `SmtpSecret` whose only accessor is
+`reveal()`. The model hides the attribute, so `toArray()` — a log line, an
+exception dump, a queued payload — produces ciphertext. `secret` is in
+`dontFlash`, so a validation failure cannot echo it back into a form.
+
+### Verification follows the configuration
+
+A fingerprint over host, port, encryption, auth mode, username, From address and
+a hash of the secret. Changing any of them returns the account to `UNVERIFIED`;
+renaming it does not. `SmtpVerifier` was refactored onto `SmtpTransportDefinition`
+rather than duplicated, so the platform mailer and a tenant account are proved by
+one implementation with the same stage names.
+
+### Identity and network policy
+
+The From address must be the authenticated SMTP username. SMTP hosts reuse the
+URL extractor's `DnsResolver` and `IpPolicy`, so every resolved address must be
+globally routable and one private answer refuses the whole host.
+
+### Readiness, not a score
+
+`DeliveryReadiness` reports PASS/WARN/BLOCK/UNKNOWN per check, with UNKNOWN as a
+real answer — DKIM without a known selector and DMARC alignment both stay
+Unknown, and consent, suppression, unsubscribe and rate policy are reported as not
+built. No numerical score exists because inbox placement is the receiving
+provider's decision, made from signals this platform cannot observe.
+
+`SendingRatePolicy` and `DeliveryOutcome` are declared with no implementation, so
+Stage 5C inherits a shape where a throttle leads to backing off rather than to
+transport switching, and `RateDecision::pause()` exists as a real result.
+
+### What was deliberately not built
+
+No campaigns, no recipients, no suppression, no unsubscribe processing, no rate
+controller, no analytics, no multi-URL extraction — and no transport rotation, IP
+warm-up, reputation score or filter-evasion mechanism. The last group is not
+merely deferred: it is the model of the product this platform declines to
+implement.

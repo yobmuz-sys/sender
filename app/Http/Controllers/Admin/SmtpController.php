@@ -57,7 +57,7 @@ class SmtpController extends Controller
     {
         abort_unless($this->mayManage($request), 403);
 
-        return $this->record(fn (): SmtpVerification => $this->verifier->verify());
+        return $this->record(fn (): SmtpVerification => $this->verifier->verifyPlatform());
     }
 
     /**
@@ -71,7 +71,7 @@ class SmtpController extends Controller
             'email' => ['required', 'email', 'max:255'],
         ]);
 
-        return $this->record(fn (): SmtpVerification => $this->verifier->verify($validated['email']));
+        return $this->record(fn (): SmtpVerification => $this->verifier->verifyPlatform($validated['email']));
     }
 
     /**

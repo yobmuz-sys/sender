@@ -19,7 +19,7 @@ long-running daemons and root access are **not** required at any point.
 > `sender:verify-url` actually measures it. Multi-URL extraction, file upload,
 > other document formats and SMTP campaign sending remain future work.
 
-Accepted baseline: `bec48f2`. 387 tests / 1075 assertions passing.
+Previous accepted baseline: `5e57606`. This release (Stage 5A) passes 468 tests / 1365 assertions.
 
 Implemented and tested:
 
@@ -48,6 +48,10 @@ Implemented and tested:
 | Declarative, permission-aware navigation derived from one source | done |
 | Route-derived breadcrumbs, shared shell, standard error pages | done |
 | Administration: dashboard, users, roles, jobs, runs, SMTP, system | done |
+| Tenant-owned and administrator-assigned SMTP transports | done |
+| Encrypted SMTP credentials, never rendered after saving | done |
+| Sender-identity enforcement, per transport and per sending domain | done |
+| Sending-readiness findings, reported as evidence rather than a score | done |
 | Honest staged pages for features, plans, campaigns, API, billing, audit | done |
 | Page-completeness and navigation-integrity test suite | done |
 
@@ -98,11 +102,109 @@ should be "fixed" by weakening a threshold or a check.
    would have to reconcile `.env` against cached configuration, and would
    bypass the invariants checked at boot. Operators edit the environment and
    confirm with `sender:diagnose`.
+11. **Deliverability findings are evidence, not a prediction.** The readiness
+   report can establish that a transport is encrypted, authenticated and
+   verified, and that the sending domain publishes SPF, DMARC and any DKIM
+   selector it was told about. It cannot establish that a message will arrive, or
+   land in an inbox rather than spam — that decision belongs to the receiving
+   provider. There is no spam score, because no local calculation can produce an
+   honest one. See [Sending health](#sending-health).
+12. **Recipient hygiene does not exist yet.** No recipient, list, consent,
+   suppression or unsubscribe records have been built. Sending readiness reports
+   these as `Not established` rather than as passes, so a fully configured
+   transport does not read as ready to send. This is the Stage 5B prerequisite,
+   and the reason the campaign engine is not built yet.
 
 **Not** implemented, and deliberately so at this stage: multi-URL extraction,
 file upload, XLSX/DOCX/PDF/XML parsing, MX and DNS validation of extracted
-addresses, SMTP campaign sending, recipients, suppression, plans, entitlements,
-usage tracking, PHP integration and billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
+addresses, campaign sending, recipients, lists, consent, suppression,
+unsubscribe processing, bounce and complaint feedback, rate-control
+implementation, analytics, plans, entitlements, usage tracking, PHP integration
+and billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+---
+
+## Mail transports
+
+Every tenant can send through their own SMTP, and an administrator can configure
+one for them. Both are the same record, differing in one column —
+`management_mode` — rather than two tables that would drift.
+
+| Page | Purpose |
+| --- | --- |
+| `/account/smtp` | Your transports: provider, endpoint, status, From address |
+| `/account/smtp/create`, `/account/smtp/{account}/edit` | Configure a transport |
+| `/account/smtp/{account}` | Detail, verification, readiness findings, test actions |
+| `/account/deliverability` | Sending health across your transports |
+| `/admin/smtp/accounts` | Every tenant's transports |
+| `/admin/users/{user}/smtp` | One tenant's transports |
+| `/admin/deliverability` | Aggregate transport health and recent failures |
+
+The existing `/admin/smtp` page is separate and unchanged: it reports the
+**platform's own** mail, which sends password resets and address confirmations
+and stays in `config/mail.php`.
+
+**Credentials are encrypted with the application key** and are never rendered
+after saving — not into the edit form, not into JSON, not into a log, and not to
+an administrator. The plaintext is reachable only by the transport that needs
+it, which is an explicit call rather than a property read.
+
+**A verification does not survive a configuration change.** Change the host,
+port, encryption, username, password or From address and the account returns to
+`Not verified`, because the evidence described a transport that no longer exists.
+Renaming an account does not, because nothing about the transport changed.
+
+**The From address must be the address the transport authenticated as.** A
+mismatch is refused: it would make this host an open relay for somebody else's
+identity, and your provider would answer for a complaint you did not cause.
+
+**SMTP hosts must resolve to publicly routable addresses.** Private, loopback,
+link-local and reserved destinations are refused — including `169.254.169.254` —
+so a transport cannot be pointed at services inside the network the platform
+runs on. The same policy the URL extractor uses, not a second implementation.
+
+**Transports are built per account, never globally.** `sender:work` processes
+many jobs per invocation, so mutating `config('mail...')` for one tenant would
+leak into the next job. Each send constructs its own transport from its own
+account's parameters.
+
+Providers are presets: Gmail, Google Workspace, cPanel and custom. They supply a
+host, a port and guidance, and nothing else — every provider uses the same
+generic SMTP connection, and your stored settings are what is actually used.
+Gmail guidance points at an App Password and tells you not to enter your ordinary
+Google account password.
+
+### Sending health
+
+Each finding is reported as `Pass`, `Warning`, `Blocked` or `Not established`.
+Checks cover transport encryption, authentication, sender identity, SPF, DKIM,
+DMARC and its published alignment policy.
+
+`Not established` is a real answer, not a soft pass. DKIM without a configured
+selector is reported that way: the final message is signed by your provider with
+a selector this platform is not told, so any record found by searching would be a
+guess, and a guessed pass is worse than an admitted gap. Same for authentication
+alignment — only the outgoing message's headers can show it.
+
+### What this cannot do
+
+The application improves the practice of sending mail. It cannot guarantee inbox
+placement: that decision is made by the receiving provider, from signals this
+platform cannot observe.
+
+Deliberately **not** built, and not planned in this form:
+
+- No automatic transport or IP rotation, and no switching to dodge a block or a
+  provider's limit.
+- No spam-filter bypass, no header randomisation intended to evade filtering.
+- No reputation score derived from the SMTP host's IP. A configured relay is
+  frequently not the infrastructure the recipient's server sees, so the number
+  would have no defensible meaning.
+- No "warm up an IP" mechanism for defeating a provider's judgement.
+
+When a transport has evidence of serious delivery problems, the platform reports
+it and stops using it. The recovery path is to repair the domain or provider
+reputation, or to configure a different relay you legitimately control.
 
 ---
 
@@ -355,15 +457,23 @@ npm run build   # production build, committed to public/build
 `/health` returns exactly `status` and `capability`. Anything more would let an
 unauthenticated caller enumerate the host.
 
-### Authenticated, email confirmed
+### Authenticated
+
+`/dashboard` is deliberately reachable by an authenticated account whose address
+is not yet confirmed, so that a user who has just signed up has somewhere to land
+while the verification banner explains the next step. Everything below requires
+a confirmed address.
 
 | Path | Purpose |
 | --- | --- |
+| `/dashboard` | Account overview. Authenticated only — not confirmation-gated |
 | `/email/verify`, `/email/verify/{id}/{hash}` | Address confirmation; `/email/verification-notification` resends (POST) |
-| `/dashboard` | Account overview |
 | `/account/profile` | Name, locale, time zone (PATCH) |
 | `/account/security` | Password change (PUT) |
 | `/extractor` | Extraction: create, history, detail, CSV download. Requires a confirmed address and the worker |
+| `/account/smtp`, `/account/smtp/create`, `/account/smtp/{account}`, `/{account}/edit` | Your SMTP transports |
+| `/account/smtp/{account}/verify`, `/send-test` | Verification actions, rate limited |
+| `/account/deliverability` | Sending health and readiness findings |
 | `/files`, `/lists`, `/templates`, `/campaigns`, `/suppression`, `/analytics` | Product surfaces — staged shells, see the limitation above |
 
 ### Administration
@@ -372,7 +482,7 @@ Each route requires its own permission; an account without it receives 403.
 
 | Path | Permission |
 | --- | --- |
-| `/admin` | `users.view` |
+| `/admin` | `admin.view` |
 | `/admin/users`, `/admin/users/create`, `/admin/users/{user}`, `/admin/users/{user}/edit` | `users.view` / `users.create` / `users.edit` |
 | `/admin/users/{user}/suspend`, `/reinstate` | `users.suspend` |
 | `/admin/roles` | `users.view` |
@@ -383,6 +493,11 @@ Each route requires its own permission; an account without it receives 403.
 | `/admin/jobs/{run}/retry`, `/forget` | `jobs.manage` |
 | `/admin/smtp`, `/admin/smtp/verification` | `system.view` |
 | `/admin/smtp/verify`, `/admin/smtp/send` | `system.manage` |
+| `/admin/smtp/accounts`, `/admin/smtp/accounts/{account}`, `/admin/users/{user}/smtp` | `mail_accounts.view` |
+| `/admin/smtp/accounts/create`, `/{account}/edit`, `/status/{status}` | `mail_accounts.manage` |
+| `/admin/smtp/accounts/{account}/assign` | `mail_accounts.assign` |
+| `/admin/smtp/accounts/{account}/verify`, `/send-test` | `mail_accounts.manage` + rate limit |
+| `/admin/deliverability` | `deliverability.view` |
 | `/admin/system`, `/admin/system/diagnostics` | `system.view` |
 | `/admin/system/subsystems`, `/{subsystem}/enable`, `/disable`, `/reset` | `system.manage` |
 | `/admin/settings` | `system.view` |

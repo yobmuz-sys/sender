@@ -58,12 +58,20 @@ enum Role: string
             ])),
 
             // Read-only across the surface, able to help users and investigate.
+            //
+            // Given the two *view* mail permissions and neither mutation
+            // permission: a support question is usually "is their mail
+            // working", which the metadata answers, and reading that metadata
+            // must not also confer the ability to replace a credential or
+            // reassign whose mail a tenant sends from.
             self::Support => [
                 Permission::ADMIN_VIEW,
                 Permission::USERS_VIEW,
                 Permission::CAMPAIGNS_VIEW,
                 Permission::JOBS_VIEW,
                 Permission::SYSTEM_VIEW,
+                Permission::MAIL_ACCOUNTS_VIEW,
+                Permission::DELIVERABILITY_VIEW,
             ],
 
             self::Operations => [

@@ -502,12 +502,13 @@ placeholders state they are placeholders.
 ## 12. Deferred by design
 
 Not built yet, on purpose: multi-URL extraction, file upload, XLSX/DOCX/PDF/XML
-parsing, MX and DNS validation of extracted addresses, SMTP campaign delivery,
-recipients and suppression, a general-purpose job engine, plans, entitlements,
-usage tracking, the REST API, PHP integration and billing. Each depends on
-foundations that did not exist before this stage, and building them first would
-mean retrofitting quotas, authorization, locking and logging around code that had
-already been written.
+parsing, MX and DNS validation of extracted addresses, campaign delivery,
+recipients, lists, consent, suppression, unsubscribe processing, bounce and
+complaint feedback, rate-control implementation, a general-purpose job engine,
+plans, entitlements, usage tracking, the REST API, PHP integration and billing.
+Each depends on foundations that did not exist before this stage, and building
+them first would mean retrofitting quotas, authorization, locking and logging
+around code that had already been written.
 
 ---
 
@@ -824,3 +825,140 @@ would be a capability that can be wrong. A target refused *by policy* is reporte
 as not established rather than unavailable — that outcome proves the policy
 works, not that the network is broken, and conflating the two sends an operator
 to the wrong place.
+
+---
+
+## 18. Per-user SMTP transports
+
+Stage 5A. The first stage of the mail product, built before any campaign
+sending. It establishes where mail can legitimately come from and what can be
+established about it, and deliberately stops there.
+
+### Two questions, two answers
+
+The platform's own mail and a tenant's sending transport are different questions
+with different answers, and are kept in different places:
+
+| Question | Answered by | Stored in |
+| --- | --- | --- |
+| Can this installation send password resets? | `SmtpCapability` | the environment |
+| Can this tenant send campaign mail? | `DeliveryReadiness` | `smtp_accounts` |
+
+`SmtpCapability` was not turned into a per-tenant registry, and a tenant's
+transport never becomes the application's transactional mailer. A campaign
+transport that silently replaced the mailer sending password resets would mean a
+customer's misconfiguration stopped their own sign-in.
+
+### One table, one column of difference
+
+A tenant-owned transport and an operator-assigned one differ only in
+`management_mode`. Two tables would mean the same transport shape expressed
+twice, two migrations to keep in step, and no single column able to answer "is
+this the operator's to change?".
+
+`admin_managed` makes a transport read-only for its owner. The owner still sees
+it — a tenant who sends through a relay is entitled to know it exists and who set
+it — but cannot edit the host or credentials of something the operator supplied.
+
+Reassignment **moves** the row. Copying it would put one encrypted credential in
+two rows that could then be verified and disabled independently.
+
+### The credential is a type, not a string
+
+The secret is encrypted in an Eloquent cast, so every write path goes through it:
+a form, a factory, an operator action. It is returned as an `SmtpSecret` whose
+only accessor is `reveal()`, so reading the plaintext is visible at the call site
+and reviewable. The model also hides the attribute, which means `toArray()` — a
+log line, an exception dump, a queued payload — produces ciphertext.
+
+`secret` is in the `dontFlash` list, so a validation failure cannot put a mailbox
+password into the session and back out into the form.
+
+### A verification is evidence about a configuration
+
+`configuration_fingerprint` digests host, port, encryption, auth mode, username,
+From address and a hash of the secret. Changing any of them returns the account
+to `UNVERIFIED`, because the proof described a transport that no longer exists.
+Renaming an account does not, because nothing about the transport changed.
+
+`SmtpVerification` remains the same staged result for both callers: the platform
+mailer and a tenant's account, through one `SmtpVerifier`. Two implementations
+would be two sets of stage names free to reach different conclusions about the
+same server, and the value of a verification is that it means one thing.
+
+### No global mail configuration
+
+```php
+Config::set('mail.mailers.smtp', [...$userConfig]);   // never this
+```
+
+`sender:work` processes many jobs per invocation, so configuration mutated for
+one job is still mutated when the next begins. The second job would submit
+through the first job's credentials — on a shared host, under the first tenant's
+provider reputation, with the first tenant's password on the wire — and nothing
+would fail loudly.
+
+`MailTransportFactory` therefore constructs a Symfony transport explicitly from
+one account's parameters and discards it. There is no global configuration to
+inherit, so there is no way for one account's settings to become another's.
+STARTTLS is requested *and required*, because a server declining the upgrade
+would otherwise be used in the clear.
+
+### The SMTP host is an outbound network target
+
+The same hazard as a submitted URL, in a different protocol. `SmtpEndpointPolicy`
+reuses `DnsResolver` and `IpPolicy` rather than restating them — two
+implementations is two things to weaken later, possibly while fixing something
+unrelated. Every resolved address must be globally routable, so one private answer
+refuses the whole host.
+
+Ports are not the restriction here that they are for HTTP: mail servers live on
+25, 465, 587 and whatever a cPanel box uses. The address check is what carries
+the security.
+
+### The From address is the authenticated address
+
+`SenderIdentityPolicy` requires `From` to equal the authenticated SMTP username.
+This is the strongest identity evidence obtainable from inside the application:
+the server accepted a login as that address. Anything looser makes this host an
+open relay for someone else's identity, and the tenant's provider would answer
+for a complaint they did not cause.
+
+Reply-To is validated but may differ — it routes replies, it does not claim
+authorship. An alias mechanism (`sender_identities`, explicitly verified) is a
+later stage; shipping a free-text From field now would mean shipping the
+permissive version first.
+
+### Readiness is evidence, not a score
+
+`DeliveryReadiness` returns findings at `PASS`, `WARN`, `BLOCK` or `UNKNOWN`.
+There is no number, because inbox placement is decided by the receiving provider
+using signals this application cannot observe, and a score would invite a
+decision it should not support.
+
+`UNKNOWN` is a first-class outcome and never becomes a pass:
+
+- **DKIM** without a configured selector. The final message is signed by the
+  provider with a selector this platform was not told; any record found by
+  searching would be a guess.
+- **Alignment.** Only the outgoing message's headers can show whether SPF or DKIM
+  aligned with the From domain, and this platform does not observe them.
+- **Consent, suppression, unsubscribe, rate policy.** Not built yet, and reported
+  as such so a fully configured transport does not read as ready to send.
+
+A present SPF record is reported as a published record, not as proof that this
+provider signs with it — only the final message's result would show that.
+
+### What is deliberately not built
+
+No transport or IP rotation, no switching to evade a block or a provider limit,
+no spam-filter bypass, no header randomisation for filtering evasion, no
+reputation score derived from the SMTP host's IP. A configured relay is often not
+the infrastructure the recipient's server sees, so such a number would have no
+defensible meaning.
+
+`SendingRatePolicy` is declared with no implementation. Its shape settles two
+things now: it is outcome-aware, so a 4xx throttle leads to backing off rather
+than switching transports, and `RateDecision::pause()` exists as a first-class
+result, so the honest response to repeated rejection is to stop and let a person
+choose a different relay.

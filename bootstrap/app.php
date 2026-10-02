@@ -35,6 +35,13 @@ return Application::configure(basePath: dirname(__DIR__))
             'password',
             'password_confirmation',
             'smtp_password',
+
+            // The per-tenant SMTP transport field. Laravel flashes every input
+            // into the session on a validation failure, so without this a
+            // mistyped From address would put a mailbox password into session
+            // storage, the redirect response, and the user's form history.
+            'secret',
+
             'api_secret',
         ]);
 

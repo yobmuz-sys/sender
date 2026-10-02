@@ -118,7 +118,7 @@ MAIL_FROM_NAME="${APP_NAME}"
 ```
 
 Setting these does not establish that mail works. A host, a port and a password
-can all be present and still be wrong — a blocked port, an expired password, a
+can all be present and still be wrong â€” a blocked port, an expired password, a
 provider that rejects the sender address. The platform therefore does not derive
 the `smtp` capability from configuration at all; it stays `UNKNOWN` until you
 verify it:
@@ -126,6 +126,11 @@ verify it:
 ```bash
 php artisan sender:verify-smtp --to=you@example.com
 ```
+
+These settings are the **platform's own** mail: password resets, address
+confirmation and system notifications. They are not a tenant's sending
+transport, and nothing a tenant configures in the browser can replace them. See
+[Per-user SMTP transports](#per-user-smtp-transports).
 
 This prints one line per stage — `configuration`, `transport`, `connection`,
 `authentication`, `acceptance` — and exits non-zero if any of them fails, so it
@@ -431,3 +436,55 @@ The directory is writable only if PHP can write to it — verify with
 worker runtime. Do not raise the worker runtime to accommodate slow sites: the
 reservation invariant depends on a job finishing inside its `retry_after`, and a
 longer worker does not make a slow host faster.
+
+---
+
+## Per-user SMTP transports
+
+Tenants configure their own sending SMTP from the browser, and an administrator
+can configure one for them. **No environment variable is involved** — a tenant's
+transport lives in the `smtp_accounts` table, and the platform's own mail in
+`config/mail.php` stays exactly as above.
+
+### What operators need to know
+
+- **Credentials are encrypted** with `APP_KEY` using Laravel's encryption, which
+  is authenticated and supports previous-key rotation. If `APP_KEY` is lost, every
+  stored transport credential is unrecoverable and each account must be re-entered.
+- **Rotating `APP_KEY`.** Set the new key as `APP_KEY` and the previous key as
+  `APP_PREVIOUS_KEYS` first. Without it, `APP_KEY` rotation silently turns every
+  stored credential into *no credential*, and the next send fails against the
+  provider for a reason that has nothing to do with the provider.
+- **SMTP hosts must be publicly routable.** Private, loopback, link-local and
+  reserved addresses are refused, including `169.254.169.254`. On cPanel this
+  means an account configured for `localhost` or `127.0.0.1` will be refused —
+  use the hostname cPanel issues, usually `mail.yourdomain.com`. This is
+  intentional: the shared host must not be usable as a probe into the network it
+  runs on.
+- **Verification actions are rate limited**, and sending a test message is bounded
+  far more tightly than testing a connection because it consumes the tenant's
+  provider quota. Tune with `SENDER_SMTP_VERIFY_THROTTLE` and
+  `SENDER_SMTP_SEND_TEST_THROTTLE`.
+- **`SENDER_SMTP_TIMEOUT_SECONDS`** defaults to 10. Keep it well below
+  `SENDER_MAX_WORKER_RUNTIME_SECONDS`, for the same reason the URL timeouts are
+  bounded: a transport that could occupy the whole worker budget would break the
+  queue's reservation invariant.
+
+### What this does not do
+
+The application improves the practice of sending mail. It cannot guarantee inbox
+placement — that is the receiving provider's decision, made from signals this
+platform cannot observe.
+
+There is no transport or IP rotation, no provider-limit bypass and no spam-filter
+bypass. When a tenant's provider rate-limits or blocks, the platform records the
+failure, stops using that transport, and says so. The remedy is to repair the
+domain or provider reputation, or to configure a different relay that the tenant
+or an administrator legitimately controls.
+
+### Before a tenant can send
+
+Recipients, consent, suppression and unsubscribe handling are not built yet.
+`/account/deliverability` reports each as **Not established** rather than as a
+pass, so a fully configured and verified transport does not read as ready to send
+mail to anyone. Campaigns remain unavailable until that stage lands.

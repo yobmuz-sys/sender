@@ -24,6 +24,10 @@ final class ProductNavigation
         return [
             new NavigationItem('Dashboard', 'dashboard'),
             new NavigationItem('Extractor', 'extractor.index', matchPrefix: true),
+            // Real pages, unlike the shells below: a tenant's SMTP transports
+            // and what can be established about them already work.
+            new NavigationItem('Mail transports', 'account.smtp.index', matchPrefix: true),
+            new NavigationItem('Sending health', 'account.deliverability.index'),
             new NavigationItem('Files', 'files.index', matchPrefix: true),
             new NavigationItem('Lists', 'lists.index', matchPrefix: true),
             new NavigationItem('Templates', 'templates.index', matchPrefix: true),

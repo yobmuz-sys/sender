@@ -36,6 +36,10 @@ final class AdminNavigation
             new NavigationItem('Jobs', 'admin.jobs.index', Permission::JOBS_VIEW),
             new NavigationItem('Runs', 'admin.runs.index', Permission::JOBS_VIEW),
             new NavigationItem('SMTP', 'admin.smtp.index', Permission::SYSTEM_VIEW),
+            // Tenants' sending transports, distinct from the platform's own mail
+            // above: those live in the environment, these in the database.
+            new NavigationItem('SMTP accounts', 'admin.smtp.accounts.index', Permission::MAIL_ACCOUNTS_VIEW, matchPrefix: true),
+            new NavigationItem('Sending health', 'admin.deliverability.index', Permission::DELIVERABILITY_VIEW),
             new NavigationItem('System', 'admin.system.index', Permission::SYSTEM_VIEW, matchPrefix: true, children: [
                 new NavigationItem('Overview', 'admin.system.index', Permission::SYSTEM_VIEW),
                 new NavigationItem('Diagnostics', 'admin.system.diagnostics', Permission::SYSTEM_VIEW),

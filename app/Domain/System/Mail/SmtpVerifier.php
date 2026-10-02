@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace App\Domain\System\Mail;
 
+use App\Domain\Mail\MailTransportFactory;
+use App\Domain\Mail\SmtpEndpointPolicy;
+use App\Domain\Mail\SmtpEndpointRefused;
+use App\Domain\Mail\SmtpTransportDefinition;
 use App\Domain\System\Enums\CapabilityStatus;
 use App\Support\SensitiveData;
-use Illuminate\Support\Facades\Mail;
 use Throwable;
 
 /**
@@ -40,9 +43,18 @@ use Throwable;
  * server advertises no authentication mechanism there was nothing to accept,
  * so claiming the stage would be asserting something that never happened; the
  * `acceptance` stage already covers credentials that were offered and taken.
+ *
+ * Takes an {@see SmtpTransportDefinition} rather than reading `config('mail')`,
+ * so the installation's transport and a tenant's account are proved by this one
+ * implementation. See {@see SmtpTransportDefinition} for why that matters.
  */
 final class SmtpVerifier
 {
+    public function __construct(
+        private readonly MailTransportFactory $mailers,
+        private readonly SmtpEndpointPolicy $endpoints,
+    ) {}
+
     /**
      * Mailers that discard mail. Configured deliberately in development, and a
      * silent cause of password resets that never arrive.
@@ -52,23 +64,26 @@ final class SmtpVerifier
     private const NON_DELIVERING = ['log', 'null', 'array', 'failover'];
 
     /**
+     * Verify the installation's own transport.
+     *
+     * Kept as a separate entry point so the platform's transactional mail keeps
+     * a question that only it can answer, and so the capability report cannot
+     * be moved by editing some other tenant's account.
+     *
      * @param  string|null  $recipient  If given, a test message is sent and the
      *                                  authentication and acceptance stages are proved.
      */
-    public function verify(?string $recipient = null): SmtpVerification
+    public function verifyPlatform(?string $recipient = null): SmtpVerification
     {
-        $stages = [];
         $mailer = (string) config('mail.default');
 
-        $stages[] = $this->stage(
-            SmtpVerification::STAGE_CONFIGURATION,
-            ! in_array($mailer, self::NON_DELIVERING, true),
-            $mailer === 'smtp' || $mailer === 'sendmail'
-                ? "mailer '{$mailer}'"
-                : "mailer '{$mailer}' does not deliver mail",
-        );
+        if (in_array($mailer, self::NON_DELIVERING, true)) {
+            $stages = [$this->stage(
+                SmtpVerification::STAGE_CONFIGURATION,
+                false,
+                "mailer '{$mailer}' does not deliver mail",
+            )];
 
-        if (! $stages[0]['passed']) {
             return $this->fail(
                 $stages,
                 "Mail is configured to use the '{$mailer}' mailer, which discards messages.",
@@ -77,20 +92,64 @@ final class SmtpVerifier
             );
         }
 
+        return $this->verify(
+            SmtpTransportDefinition::fromPlatformConfiguration($mailer),
+            $recipient,
+        );
+    }
+
+    /**
+     * Verify an arbitrary transport.
+     *
+     * The same staged probe for the installation's mail and for a tenant's
+     * account. Two implementations would be two sets of stage names and two
+     * chances to reach different conclusions about the same server — and the
+     * whole value of a verification is that it means one specific thing.
+     *
+     * @param  string|null  $recipient  If given, a test message is sent and the
+     *                                  authentication and acceptance stages are proved.
+     */
+    public function verify(SmtpTransportDefinition $transport, ?string $recipient = null): SmtpVerification
+    {
+        $stages = [];
+        $identifier = $transport->identifier;
+
+        $stages[] = $this->stage(
+            SmtpVerification::STAGE_CONFIGURATION,
+            true,
+            sprintf('%s on %s (%s)', $identifier, $transport->encryption->label(), $transport->endpoint()),
+        );
+
+        // The endpoint is checked before anything is dialled. Refusing
+        // 10.0.0.5 here is the whole point of the check: once a socket is open
+        // the attempt has already happened.
+        try {
+            $this->endpoints->assertConnectable($transport->host);
+        } catch (SmtpEndpointRefused $refusal) {
+            $stages[] = $this->stage(SmtpVerification::STAGE_CONFIGURATION, false, $refusal->getMessage());
+
+            return $this->fail(
+                $stages,
+                'The configured mail server is not one this platform will connect to.',
+                null,
+                $identifier,
+            );
+        }
+
         // Build the transport without opening it. This proves the configuration
         // is coherent before any network I/O is attempted.
         try {
-            $transport = Mail::mailer()->getSymfonyTransport();
+            $built = $this->build($transport);
 
             $stages[] = $this->stage(
                 SmtpVerification::STAGE_TRANSPORT,
                 true,
-                'transport built from the current mail configuration',
+                'transport built from the account configuration',
             );
         } catch (Throwable $exception) {
             $stages[] = $this->stage(SmtpVerification::STAGE_TRANSPORT, false, $exception->getMessage());
 
-            return $this->fail($stages, 'The mail configuration is not valid.', $exception->getMessage(), $mailer);
+            return $this->fail($stages, 'The mail configuration is not valid.', $exception->getMessage(), $identifier);
         }
 
         // Connect, and negotiate TLS where the scheme requires it. The
@@ -98,9 +157,15 @@ final class SmtpVerifier
         // it for the test message, and stopping it here would force a second
         // full round trip to a server that may rate-limit connections.
         try {
-            $transport->start();
+            $built->start();
 
-            $stages[] = $this->stage(SmtpVerification::STAGE_CONNECTION, true, 'host resolved, connected, and negotiated the configured scheme');
+            $stages[] = $this->stage(
+                SmtpVerification::STAGE_CONNECTION,
+                true,
+                $transport->encryption->isSecure()
+                    ? 'host resolved, connected, and negotiated '.$transport->encryption->value
+                    : 'host resolved and connected without transport encryption',
+            );
         } catch (Throwable $exception) {
             // Symfony performs the login inside start(), so a rejected
             // credential and an unreachable host arrive as the same exception.
@@ -115,22 +180,17 @@ final class SmtpVerifier
                     $stages,
                     'The mail server was reached, but rejected these credentials.',
                     $exception->getMessage(),
-                    $mailer,
+                    $identifier,
                 );
             }
 
             $stages[] = $this->stage(SmtpVerification::STAGE_CONNECTION, false, $exception->getMessage());
 
-            return $this->fail(
-                $stages,
-                'Could not open a connection to the mail server.',
-                $exception->getMessage(),
-                $mailer,
-            );
+            return $this->fail($stages, 'Could not open a connection to the mail server.', $exception->getMessage(), $identifier);
         }
 
         if ($recipient === null || $recipient === '') {
-            $transport->stop();
+            $built->stop();
 
             // Honest partial result: everything up to the socket is proved, and
             // the credentials have not been exercised at all.
@@ -139,15 +199,24 @@ final class SmtpVerifier
                 $stages,
                 'Connection proved. Credentials were not exercised: no verification address was given.',
                 now()->getTimestamp(),
-                mailer: $mailer,
+                mailer: $identifier,
             );
         }
 
         try {
-            $accepted = Mail::mailer()->raw(
-                'Sender platform SMTP verification. If you received this, the installation can submit mail.',
-                static function ($message) use ($recipient): void {
+            $accepted = $built->mailer()->raw(
+                'Sender platform SMTP verification. If you received this, the transport can submit mail.',
+                static function ($message) use ($recipient, $transport): void {
                     $message->to($recipient)->subject('Sender SMTP verification');
+
+                    // Sent from the authenticated identity, because a From that
+                    // disagrees with the login is exactly what this platform
+                    // refuses to send in normal operation.
+                    $from = $transport->permittedFromAddress();
+
+                    if ($from !== null) {
+                        $message->from($from);
+                    }
                 },
             );
         } catch (Throwable $exception) {
@@ -157,11 +226,11 @@ final class SmtpVerifier
                 $stages,
                 'The mail server was reached, but it rejected these credentials or the message.',
                 $exception->getMessage(),
-                $mailer,
+                $identifier,
             );
         } finally {
             // Released on both paths, so a verification never leaks a socket.
-            $transport->stop();
+            $built->stop();
         }
 
         $stages[] = $this->stage(
@@ -171,7 +240,7 @@ final class SmtpVerifier
         );
 
         if (! $accepted) {
-            return $this->fail($stages, 'The mail server declined the test message.', null, $mailer);
+            return $this->fail($stages, 'The mail server declined the test message.', null, $identifier);
         }
 
         return new SmtpVerification(
@@ -179,8 +248,20 @@ final class SmtpVerifier
             $stages,
             'The server accepted a test message. This does not prove recipient delivery.',
             now()->getTimestamp(),
-            mailer: $mailer,
+            mailer: $identifier,
         );
+    }
+
+    /**
+     * Build an isolated mailer for one transport.
+     *
+     * No global configuration is written. `sender:work` processes several jobs
+     * per invocation, and a `config()` mutation left in place would let one
+     * tenant's job inherit another's credentials.
+     */
+    private function build(SmtpTransportDefinition $transport): IsolatedMailer
+    {
+        return $this->mailers->for($transport);
     }
 
     /**

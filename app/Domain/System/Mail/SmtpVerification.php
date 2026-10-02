@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Domain\System\Mail;
 
 use App\Domain\System\Enums\CapabilityStatus;
+use App\Support\SensitiveData;
 
 /**
  * The outcome of one SMTP verification, and — crucially — what it did and did
@@ -108,6 +109,40 @@ final readonly class SmtpVerification
             (int) ($data['verified_at'] ?? 0),
             isset($data['error']) ? (string) $data['error'] : null,
             isset($data['mailer']) ? (string) $data['mailer'] : null,
+        );
+    }
+
+    /**
+     * A refusal that happened before any connection was attempted.
+     *
+     * Used when the stored configuration cannot be meaningfully probed at all —
+     * no secret, an insecure transport, a blocked address. No stage is marked as
+     * passed, because nothing was tried: reporting a connection that was never
+     * made would be the same false evidence this type exists to keep out.
+     */
+    public static function refused(string $summary, string $identifier): self
+    {
+        return new self(
+            CapabilityStatus::Unavailable,
+            [],
+            $summary,
+            now()->getTimestamp(),
+            mailer: $identifier,
+        );
+    }
+
+    /**
+     * A verification that failed, with the category an operator should act on.
+     */
+    public static function failed(string $error, string $identifier, string $reason): self
+    {
+        return new self(
+            CapabilityStatus::Unavailable,
+            [],
+            'The mail server could not be verified.',
+            now()->getTimestamp(),
+            SensitiveData::redactText($error).' [category: '.$reason.']',
+            $identifier,
         );
     }
 }

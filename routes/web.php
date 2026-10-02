@@ -3,12 +3,15 @@
 declare(strict_types=1);
 
 use App\Domain\Users\Permission;
+use App\Http\Controllers\Account\DeliverabilityController as AccountDeliverabilityController;
+use App\Http\Controllers\Account\SmtpAccountController as AccountSmtpAccountController;
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\Admin\ApiController;
 use App\Http\Controllers\Admin\AuditController;
 use App\Http\Controllers\Admin\BillingController;
 use App\Http\Controllers\Admin\CampaignsController;
 use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
+use App\Http\Controllers\Admin\DeliverabilityController as AdminDeliverabilityController;
 use App\Http\Controllers\Admin\DiagnosticsController as AdminDiagnosticsController;
 use App\Http\Controllers\Admin\FeaturesController;
 use App\Http\Controllers\Admin\JobController;
@@ -16,6 +19,7 @@ use App\Http\Controllers\Admin\PlansController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\RunController;
 use App\Http\Controllers\Admin\SettingsController;
+use App\Http\Controllers\Admin\SmtpAccountController;
 use App\Http\Controllers\Admin\SmtpController;
 use App\Http\Controllers\Admin\SubsystemController;
 use App\Http\Controllers\Admin\SystemController;
@@ -102,6 +106,31 @@ Route::middleware('auth')->group(function (): void {
 
 Route::middleware(['auth', 'confirmed'])->group(function (): void {
 
+    // The tenant's own SMTP transports. Ownership is checked in the controller
+    // by scoping every lookup to the signed-in account, so another tenant's
+    // route resolves to nothing rather than to a forbidden page.
+    Route::prefix('account/smtp')->name('account.smtp.')->group(function (): void {
+        Route::get('/', [AccountSmtpAccountController::class, 'index'])->name('index');
+        Route::get('create', [AccountSmtpAccountController::class, 'create'])->name('create');
+        Route::post('/', [AccountSmtpAccountController::class, 'store'])->name('store');
+        Route::get('{account}', [AccountSmtpAccountController::class, 'show'])->name('show');
+        Route::get('{account}/edit', [AccountSmtpAccountController::class, 'edit'])->name('edit');
+        Route::put('{account}', [AccountSmtpAccountController::class, 'update'])->name('update');
+        Route::delete('{account}', [AccountSmtpAccountController::class, 'destroy'])->name('destroy');
+
+        // A connection probe costs a socket; a test message spends the
+        // customer's provider quota. Separate limits, and the tighter one is on
+        // the action that actually sends.
+        Route::post('{account}/verify', [AccountSmtpAccountController::class, 'verifyConnection'])
+            ->middleware('throttle:'.config('sender.smtp.verification_throttle.connection', '10,1'))
+            ->name('verify');
+        Route::post('{account}/send-test', [AccountSmtpAccountController::class, 'sendTestMessage'])
+            ->middleware('throttle:'.config('sender.smtp.verification_throttle.test_message', '5,60'))
+            ->name('send-test');
+    });
+
+    Route::get('account/deliverability', AccountDeliverabilityController::class)->name('account.deliverability.index');
+
     Route::get('extractor', [ExtractorController::class, 'index'])->name('extractor.index');
     Route::get('extractor/new', [ExtractorController::class, 'create'])->name('extractor.create');
     Route::post('extractor', [ExtractorController::class, 'store'])->name('extractor.store');
@@ -187,6 +216,39 @@ Route::middleware(['auth', 'confirmed', 'can:'.Permission::ADMIN_VIEW])
         Route::post('smtp/verify', [SmtpController::class, 'verify'])->middleware('can:'.Permission::SYSTEM_MANAGE)->name('smtp.verify');
         Route::post('smtp/send', [SmtpController::class, 'sendTestMessage'])->middleware('can:'.Permission::SYSTEM_MANAGE)->name('smtp.send');
         Route::delete('smtp/verification', [SmtpController::class, 'forget'])->middleware('can:'.Permission::SYSTEM_MANAGE)->name('smtp.forget');
+
+        // Tenants' SMTP transports. Distinct from `smtp` above, which reports the
+        // platform's own transactional mail: that stays in the environment, and
+        // must not become a tenant's sending transport.
+        Route::prefix('smtp/accounts')->name('smtp.accounts.')->group(function (): void {
+            Route::get('/', [SmtpAccountController::class, 'index'])->middleware('can:'.Permission::MAIL_ACCOUNTS_VIEW)->name('index');
+            Route::get('create', [SmtpAccountController::class, 'create'])->middleware('can:'.Permission::MAIL_ACCOUNTS_MANAGE)->name('create');
+            Route::post('/', [SmtpAccountController::class, 'store'])->middleware('can:'.Permission::MAIL_ACCOUNTS_MANAGE)->name('store');
+            Route::get('{account}', [SmtpAccountController::class, 'show'])->middleware('can:'.Permission::MAIL_ACCOUNTS_VIEW)->name('show');
+            Route::get('{account}/edit', [SmtpAccountController::class, 'edit'])->middleware('can:'.Permission::MAIL_ACCOUNTS_MANAGE)->name('edit');
+            Route::put('{account}', [SmtpAccountController::class, 'update'])->middleware('can:'.Permission::MAIL_ACCOUNTS_MANAGE)->name('update');
+            Route::delete('{account}', [SmtpAccountController::class, 'destroy'])->middleware('can:'.Permission::MAIL_ACCOUNTS_MANAGE)->name('destroy');
+
+            // A move, not a copy: the credential is never duplicated into a
+            // second row that could be verified or disabled on its own.
+            Route::post('{account}/assign', [SmtpAccountController::class, 'assign'])->middleware('can:'.Permission::MAIL_ACCOUNTS_ASSIGN)->name('assign');
+
+            // Status is an outcome of verification, except for the deliberate
+            // switch-off, which an operator performs.
+            Route::post('{account}/status/{status}', [SmtpAccountController::class, 'setStatus'])->middleware('can:'.Permission::MAIL_ACCOUNTS_MANAGE)->name('status');
+
+            // Throttled independently: the first opens a socket, the second
+            // spends the customer's provider quota by sending mail.
+            Route::post('{account}/verify', [SmtpAccountController::class, 'verifyConnection'])
+                ->middleware('throttle:'.config('sender.smtp.verification_throttle.connection', '10,1'))
+                ->name('verify');
+            Route::post('{account}/send-test', [SmtpAccountController::class, 'sendTestMessage'])
+                ->middleware('throttle:'.config('sender.smtp.verification_throttle.test_message', '5,60'))
+                ->name('send-test');
+        });
+
+        Route::get('users/{user}/smtp', [SmtpAccountController::class, 'forUser'])->middleware('can:'.Permission::MAIL_ACCOUNTS_VIEW)->name('users.smtp');
+        Route::get('deliverability', AdminDeliverabilityController::class)->middleware('can:'.Permission::DELIVERABILITY_VIEW)->name('deliverability.index');
 
         Route::prefix('system')->group(function (): void {
             Route::get('/', SystemController::class)->middleware('can:'.Permission::SYSTEM_VIEW)->name('system.index');

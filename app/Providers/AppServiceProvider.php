@@ -6,6 +6,8 @@ namespace App\Providers;
 
 use App\Domain\Extraction\Extractor;
 use App\Domain\Extraction\Url\SecureUrlFetcher;
+use App\Domain\Mail\DeliveryReadiness;
+use App\Domain\Mail\SmtpEndpointPolicy;
 use App\Domain\System\Capabilities\CapabilityRegistry;
 use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Entitlements\DenyAllEntitlement;
@@ -57,6 +59,16 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(UrlFetchCapability::class),
             ),
         );
+
+        // A tenant-supplied SMTP host is an outbound network target, exactly as a
+        // submitted URL is. Bound as a singleton so the platform SMTP verifier
+        // and the per-user verifier are guaranteed to be judging reachability by
+        // the same policy — two implementations is two things to weaken later.
+        $this->app->singleton(SmtpEndpointPolicy::class, static fn (): SmtpEndpointPolicy => SmtpEndpointPolicy::make());
+
+        // One instance so DNS evidence is resolved once per page and every
+        // finding on that page agrees about it.
+        $this->app->scoped(DeliveryReadiness::class);
     }
 
     public function boot(): void

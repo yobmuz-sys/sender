@@ -43,7 +43,7 @@ class VerifySmtpCommand extends Command
             $this->line('This proves the connection only. Pass --to=you@example.com to prove credentials.');
         }
 
-        $verification = $verifier->verify(is_string($recipient) ? $recipient : null);
+        $verification = $verifier->verifyPlatform(is_string($recipient) ? $recipient : null);
 
         $capability->record($verification);
 

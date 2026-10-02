@@ -137,6 +137,43 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Per-user SMTP transports
+    |---------------------------------------------------------------------------
+    |
+    | Configuration for tenant-owned and operator-assigned SMTP accounts. The
+    | platform's own transactional transport is NOT configured here: it stays in
+    | `config/mail.php` and the environment, so a customer's sending transport
+    | can never become the mailer that resets passwords.
+    |
+    */
+    'smtp' => [
+        // Seconds a transport may take to connect and complete a handshake.
+        // Kept far below the worker runtime for the same reason the URL
+        // timeouts are: a transport that could occupy the whole worker budget
+        // would break the queue's reservation invariant.
+        'timeout_seconds' => (int) env('SENDER_SMTP_TIMEOUT_SECONDS', 10),
+
+        // How long an account verification is treated as current. Past this the
+        // account reports STALE and is not eligible to send, because a server
+        // can change underneath a stored credential at any time.
+        'verification_fresh_after_seconds' => (int) env('SENDER_SMTP_ACCOUNT_FRESH_AFTER_SECONDS', 86400),
+
+        /*
+        | Verification is rate limited, and the two actions have different limits
+        | because they are not equally expensive: a connection probe opens a
+        | socket and discards it, while a test message puts mail on the wire and
+        | consumes the customer's provider quota. Without a bound, the second
+        | would be a mail-sending endpoint reachable from a browser loop, and the
+        | customer would be the one whose provider rate-limited them.
+        */
+        'verification_throttle' => [
+            'connection' => (string) env('SENDER_SMTP_VERIFY_THROTTLE', '10,1'),
+            'test_message' => (string) env('SENDER_SMTP_SEND_TEST_THROTTLE', '5,60'),
+        ],
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
     | Outbound URL fetching
     |---------------------------------------------------------------------------
     |
@@ -147,7 +184,7 @@ return [
     | The timeouts are deliberately far below the worker runtime. A fetch that
     | could occupy the whole worker budget would make the queue's reservation
     | invariant impossible to keep, so the correct response to slow hosts is a
-    | shorter HTTP timeout — never a longer worker.
+    | shorter HTTP timeout â€” never a longer worker.
     */
     'url_fetch' => [
         // Longest URL accepted, checked before parsing so a hostile string

@@ -36,6 +36,38 @@ final class Permission
 
     public const CAMPAIGNS_PAUSE = 'campaigns.pause';
 
+    /**
+     * Read transport metadata across tenants.
+     *
+     * Deliberately separate from `mail_accounts.manage`: a support role needs to
+     * answer "is this customer's mail working", and must not thereby gain the
+     * ability to create, reassign or disable an operator's transport.
+     */
+    public const MAIL_ACCOUNTS_VIEW = 'mail_accounts.view';
+
+    /**
+     * Create, edit, disable and verify any tenant's SMTP account.
+     */
+    public const MAIL_ACCOUNTS_MANAGE = 'mail_accounts.manage';
+
+    /**
+     * Assign a transport to a tenant.
+     *
+     * Split from `manage` because the assignment decides whose address a tenant's
+     * mail appears to come from — a change with consequences beyond the transport
+     * itself, and one an operator should take deliberately.
+     */
+    public const MAIL_ACCOUNTS_ASSIGN = 'mail_accounts.assign';
+
+    /**
+     * Read deliverability findings across tenants.
+     *
+     * Findings contain DNS evidence and configuration metadata. They never
+     * contain a credential, so this permission carries no disclosure risk of its
+     * own — which is the reason it is not part of the mail account permissions.
+     */
+    public const DELIVERABILITY_VIEW = 'deliverability.view';
+
     public const JOBS_VIEW = 'jobs.view';
 
     public const JOBS_MANAGE = 'jobs.manage';
@@ -84,6 +116,12 @@ final class Permission
             'Campaigns' => [
                 self::CAMPAIGNS_VIEW,
                 self::CAMPAIGNS_PAUSE,
+            ],
+            'Mail' => [
+                self::MAIL_ACCOUNTS_VIEW,
+                self::MAIL_ACCOUNTS_MANAGE,
+                self::MAIL_ACCOUNTS_ASSIGN,
+                self::DELIVERABILITY_VIEW,
             ],
             'Jobs' => [
                 self::JOBS_VIEW,
