@@ -10,3 +10,22 @@
     --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
 }
+
+@layer base {
+    /* A `details` element used as a menu keeps its platform marker otherwise,
+       which puts a triangle inside an already icon-only control. */
+    summary {
+        list-style: none;
+    }
+
+    summary::-webkit-details-marker {
+        display: none;
+    }
+
+    /* Anchor navigation must not animate for readers who asked for stillness. */
+    @media (prefers-reduced-motion: reduce) {
+        html {
+            scroll-behavior: auto;
+        }
+    }
+}

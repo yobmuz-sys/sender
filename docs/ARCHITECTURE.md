@@ -45,6 +45,14 @@ deliberate reversal of Laravel's default `.gitignore`, which excludes
 Rejected: Inertia/Vue/React SPA. It would add a Node build to every deployment
 and provide nothing that Blade does not, at this stage.
 
+Two layouts, deliberately. `x-layout` is the signed-in application shell:
+navigation, breadcrumbs, session flashes. `x-public-layout` is the public shell
+used by `/` only, and carries none of those — a landing page that shows the
+application navigation, a breadcrumb trail and a build version reads as an
+internal screen rather than a product. The public shell depends on no
+JavaScript: its mobile section menu is a `details` disclosure, so the header
+works before the bundle loads and cannot be broken by a script error.
+
 ## 4. Module layout
 
 ```
