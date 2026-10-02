@@ -18,6 +18,7 @@ use App\Domain\Mail\SmtpFailureReason;
 use App\Domain\Mail\SmtpProvider;
 use App\Domain\Mail\SmtpTransportDefinition;
 use App\Domain\Mail\SmtpTransportUnavailable;
+use App\Domain\Mail\TrafficMode;
 use App\Models\User;
 
 /**
@@ -25,8 +26,9 @@ use App\Models\User;
  * pretend.
  *
  * The tests that matter most here are the negative ones: an absent DMARC record
- * has to block, an unknown DKIM has to stay unknown, and nothing in the report
- * may claim delivery.
+ * has to block *bulk sending* while leaving a working transport reported as
+ * technically ready, an unknown DKIM has to stay unknown, and nothing in the
+ * report may claim delivery.
  */
 class DeliveryReadinessTest extends MailTestCase
 {
@@ -161,6 +163,109 @@ class DeliveryReadinessTest extends MailTestCase
             $report->level('DMARC'),
             'A domain cannot adopt a DMARC policy for mail already in flight.',
         );
+    }
+
+    /**
+     * The distinction that stops a working transport being reported as broken.
+     *
+     * Gmail and Yahoo require SPF *and* DKIM *and* DMARC with alignment of bulk
+     * senders, and SPF *or* DKIM for everybody else. So an absent DMARC record is
+     * a real gap for a campaign and not a fault in the SMTP account, and a report
+     * that collapses the two would tell a customer their transport is broken when
+     * what is actually wrong is a sender-authentication policy they have not
+     * adopted yet.
+     */
+    public function test_a_missing_dmarc_record_does_not_make_the_transport_unhealthy(): void
+    {
+        $account = $this->accountFor(User::factory()->create());
+        $account->markVerified(3600);
+
+        $report = $this->reportWithDns($account->fresh(), spf: true, dmarc: false, dkimSelector: false);
+
+        $this->assertTrue(
+            $report->isTransportHealthy(),
+            'A verified, encrypted, correctly-identified transport with no DMARC record is technically ready.',
+        );
+
+        $this->assertSame('Ready', $report->transportStatus());
+
+        $this->assertFalse(
+            $report->isReady(TrafficMode::BulkMarketing),
+            'Bulk marketing is still blocked, and that is the honest answer for it.',
+        );
+
+        $this->assertTrue(
+            $report->isReady(TrafficMode::Transactional),
+            'The same record is a warning, not a block, for transactional mail.',
+        );
+    }
+
+    public function test_the_dmarc_finding_is_reported_at_both_strengths(): void
+    {
+        $account = $this->accountFor(User::factory()->create());
+        $account->markVerified(3600);
+
+        $report = $this->reportWithDns($account->fresh(), spf: true, dmarc: false, dkimSelector: false);
+
+        $this->assertSame(
+            ReadinessLevel::Warn,
+            $report->levelIn('DMARC', TrafficMode::Transactional),
+        );
+
+        $this->assertSame(
+            ReadinessLevel::Block,
+            $report->levelIn('DMARC', TrafficMode::BulkMarketing),
+        );
+
+        // Named as a bulk-only gap, so the page can distinguish "your transport is
+        // broken" from "your sending policy is incomplete".
+        $this->assertCount(1, $report->bulkOnlyBlockers());
+        $this->assertSame('DMARC', $report->bulkOnlyBlockers()[0]->check);
+    }
+
+    public function test_a_published_dmarc_record_satisfies_both_modes(): void
+    {
+        $account = $this->accountFor(User::factory()->create());
+        $account->markVerified(3600);
+
+        $report = $this->reportWithDns($account->fresh(), spf: true, dmarc: true, dkimSelector: true);
+
+        $this->assertSame(ReadinessLevel::Pass, $report->levelIn('DMARC', TrafficMode::Transactional));
+        $this->assertSame(ReadinessLevel::Pass, $report->levelIn('DMARC', TrafficMode::BulkMarketing));
+        $this->assertSame([], $report->bulkOnlyBlockers());
+    }
+
+    /**
+     * A transport fault is not traffic-dependent, and must not be softened by the
+     * mode distinction.
+     */
+    public function test_a_transport_fault_blocks_in_every_mode(): void
+    {
+        $account = $this->accountFor(User::factory()->create(), [
+            'encryption' => SmtpEncryption::None->value,
+            'port' => 25,
+        ]);
+
+        $report = $this->reportWithDns($account, spf: true, dmarc: true, dkimSelector: true);
+
+        foreach ([TrafficMode::Transactional, TrafficMode::BulkMarketing] as $mode) {
+            $this->assertSame(
+                ReadinessLevel::Block,
+                $report->levelIn('Transport encryption', $mode),
+                'A password crossing the network in clear text is a disclosure in every mode.',
+            );
+        }
+
+        $this->assertFalse($report->isTransportHealthy());
+    }
+
+    public function test_the_two_modes_state_their_own_requirements(): void
+    {
+        $this->assertFalse(TrafficMode::Transactional->requiresDmarc());
+        $this->assertTrue(TrafficMode::BulkMarketing->requiresDmarc());
+
+        $this->assertStringContainsString('SPF or DKIM', TrafficMode::Transactional->requirement());
+        $this->assertStringContainsString('one-click unsubscribe', TrafficMode::BulkMarketing->requirement());
     }
 
     public function test_a_missing_spf_record_is_reported(): void

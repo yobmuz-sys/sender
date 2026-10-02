@@ -137,6 +137,90 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Recipient validation
+    |---------------------------------------------------------------------------
+    |
+    | The platform's accuracy objective is narrow and stated here rather than
+    | implied: maximise the precision of CONFIRMED_INVALID, and never classify
+    | uncertain evidence as inactive. A timeout, a 4xx, a 252, a policy rejection,
+    | a catch-all acceptance and an unreachable resolver are all UNKNOWN, and
+    | UNKNOWN is excluded from sending by default. None of the switches below can
+    | turn an ambiguous result into an invalid one — they decide how much work is
+    | attempted and how long evidence stays current.
+    |
+    | `smtp_probing` is off by default and should stay off on shared hosting.
+    | Outbound port 25 is blocked by most cPanel hosts precisely because
+    | unsolicited outbound mail from a shared account gets the host suspended. A
+    | refused connection yields UNKNOWN, never a dead address, so leaving it on
+    | wastes worker time without improving any classification.
+    |
+    */
+    'validation' => [
+        /*
+        | Whether to open an SMTP conversation with a recipient's own mail server.
+        |
+        | Off means the pipeline stops after the mail-route check and reports
+        | VERIFICATION_BLOCKED. That is a truthful answer — this host cannot
+        | confirm individual mailboxes — rather than a failed one.
+        */
+        'smtp_probing' => (bool) env('SENDER_VALIDATION_SMTP_PROBING', false),
+
+        // Seconds allowed for one recipient check, connection through RCPT TO.
+        // Far below the worker runtime, for the same reason the URL timeouts are.
+        'smtp_timeout_seconds' => (int) env('SENDER_VALIDATION_SMTP_TIMEOUT_SECONDS', 5),
+
+        /*
+        | How long a domain's mail route is reused, and how long a catch-all
+        | verdict is reused.
+        |
+        | Two windows rather than one because the two answers have different
+        | lifetimes and different consequences when wrong. A route changes only
+        | when DNS changes, so hours are safe. A catch-all verdict is negative
+        | information — it says acceptance proves nothing — and a stale one either
+        | discards a usable audience or keeps one that no longer exists, so it is
+        | the shorter of the two even though the positive case is the expensive
+        | one to rediscover.
+        */
+        'domain_cache_ttl_seconds' => (int) env('SENDER_VALIDATION_DOMAIN_CACHE_TTL_SECONDS', 21600),
+        'catch_all_cache_ttl_seconds' => (int) env('SENDER_VALIDATION_CATCH_ALL_CACHE_TTL_SECONDS', 259200),
+
+        /*
+        | How long a mailbox result is reused.
+        |
+        | A mailbox that accepted an address yesterday says nothing about tomorrow:
+        | the server can start refusing it at any moment, and a stale "active" is
+        | what turns a healthy list into a burst of bounces. A week is therefore
+        | the ceiling rather than the target, and re-running the same extraction
+        | tomorrow re-probes rather than trusting a stored acceptance.
+        */
+        'mailbox_cache_ttl_seconds' => (int) env('SENDER_VALIDATION_MAILBOX_CACHE_TTL_SECONDS', 604800),
+
+        /*
+        | How long a confirmed-invalid result is reused.
+        |
+        | Longer, and deliberately asymmetric with the above. A mailbox that does
+        | not exist is a stable fact, and re-probing it costs the receiving server
+        | work in exchange for no new information. A month is not "permanent" —
+        // the contact keeps an expiry and can be revalidated by an operator.
+        */
+        'invalid_cache_ttl_seconds' => (int) env('SENDER_VALIDATION_INVALID_CACHE_TTL_SECONDS', 2592000),
+
+        /*
+        | Rows of a validation pass committed per batch, and the ceiling on one
+        | pass.
+        |
+        | Batched so a worker interruption leaves durable progress rather than a
+        | half-written run. The pass ceiling is what makes a validation job
+        | resumable rather than unbounded: past it the job re-queues itself, so
+        | a 10,000-address list is ten bounded passes instead of one that
+        | overruns the worker and is killed mid-way.
+        */
+        'batch_size' => (int) env('SENDER_VALIDATION_BATCH_SIZE', 50),
+        'max_per_pass' => (int) env('SENDER_VALIDATION_MAX_PER_PASS', 150),
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
     | Per-user SMTP transports
     |---------------------------------------------------------------------------
     |

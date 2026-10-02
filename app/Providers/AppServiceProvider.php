@@ -4,7 +4,19 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Domain\Audience\CatchAllDetector;
+use App\Domain\Audience\ContactSyncer;
+use App\Domain\Audience\DnsMailRouteResolver;
+use App\Domain\Audience\DomainValidationCache;
+use App\Domain\Audience\MailboxSmtpValidator;
+use App\Domain\Audience\MailboxValidationCache;
+use App\Domain\Audience\MailRouteResolver;
+use App\Domain\Audience\RecipientProber;
+use App\Domain\Audience\SmtpRecipientProber;
+use App\Domain\Audience\SyntaxValidator;
+use App\Domain\Audience\ValidationPipeline;
 use App\Domain\Extraction\Extractor;
+use App\Domain\Extraction\PendingTaskQueue;
 use App\Domain\Extraction\Url\SecureUrlFetcher;
 use App\Domain\Mail\DeliveryReadiness;
 use App\Domain\Mail\SmtpEndpointPolicy;
@@ -39,6 +51,11 @@ class AppServiceProvider extends ServiceProvider
         // integers the container cannot supply.
         $this->app->singleton(Extractor::class, static fn (): Extractor => Extractor::fromConfiguration());
 
+        // One instance so the answer to "is this account already busy" is the
+        // same everywhere it is asked, and so a test that swaps one in is
+        // swapping the same object the controller and the jobs would see.
+        $this->app->singleton(PendingTaskQueue::class);
+
         // Bound rather than autowired: UrlValidator's constructor takes
         // configuration values the container cannot infer, and the fetcher must
         // be the *same* instance everywhere so the capability check and the
@@ -69,6 +86,58 @@ class AppServiceProvider extends ServiceProvider
         // One instance so DNS evidence is resolved once per page and every
         // finding on that page agrees about it.
         $this->app->scoped(DeliveryReadiness::class);
+
+        $this->registerAudienceBindings();
+    }
+
+    /**
+     * Bind the audience and validation layer.
+     *
+     * Almost none of it can be autowired. {@see ValidationPipeline} takes two
+     * booleans and an integer from configuration, and the two outbound interfaces
+     * exist precisely so they can be substituted in a test. Leaving that to the
+     * container's reflection would mean a pipeline that could not be constructed
+     * at all, and an interface that resolved to nothing.
+     *
+     * {@see MailboxValidationCache} is bound *scoped* rather than singleton for a
+     * reason that matters under a queue worker: a single worker process runs many
+     * jobs, and a singleton would carry one tenant's cached outcomes into the next
+     * job. Scoped bindings are rebuilt per job by Laravel's queue integration, so
+     * the guarantee is made by the framework rather than by resetting state
+     * somewhere it can be forgotten.
+     */
+    private function registerAudienceBindings(): void
+    {
+        $this->app->singleton(MailRouteResolver::class, DnsMailRouteResolver::class);
+
+        $this->app->singleton(
+            RecipientProber::class,
+            static fn (): SmtpRecipientProber => SmtpRecipientProber::fromConfiguration(),
+        );
+
+        $this->app->singleton(CatchAllDetector::class);
+        $this->app->singleton(MailboxSmtpValidator::class);
+        $this->app->singleton(DomainValidationCache::class);
+        $this->app->scoped(MailboxValidationCache::class);
+
+        // Its batch size comes from the shared deployment limit rather than a
+        // value of its own, for the same reason Extractor is bound rather than
+        // autowired.
+        $this->app->singleton(
+            ContactSyncer::class,
+            static fn (): ContactSyncer => ContactSyncer::fromConfiguration(),
+        );
+
+        $this->app->singleton(ValidationPipeline::class, static fn ($app): ValidationPipeline => new ValidationPipeline(
+            $app->make(SyntaxValidator::class),
+            $app->make(MailRouteResolver::class),
+            $app->make(CatchAllDetector::class),
+            $app->make(MailboxSmtpValidator::class),
+            $app->make(DomainValidationCache::class),
+            $app->make(MailboxValidationCache::class),
+            (bool) config('sender.validation.smtp_probing', false),
+            (int) config('sender.validation.catch_all_cache_ttl_seconds', 259200),
+        ));
     }
 
     public function boot(): void

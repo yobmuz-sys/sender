@@ -7,6 +7,7 @@ use App\Http\Controllers\Account\DeliverabilityController as AccountDeliverabili
 use App\Http\Controllers\Account\SmtpAccountController as AccountSmtpAccountController;
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\Admin\ApiController;
+use App\Http\Controllers\Admin\AudienceController as AdminAudienceController;
 use App\Http\Controllers\Admin\AuditController;
 use App\Http\Controllers\Admin\BillingController;
 use App\Http\Controllers\Admin\CampaignsController;
@@ -15,6 +16,7 @@ use App\Http\Controllers\Admin\DeliverabilityController as AdminDeliverabilityCo
 use App\Http\Controllers\Admin\DiagnosticsController as AdminDiagnosticsController;
 use App\Http\Controllers\Admin\FeaturesController;
 use App\Http\Controllers\Admin\JobController;
+use App\Http\Controllers\Admin\ListController as AdminListController;
 use App\Http\Controllers\Admin\PlansController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\RunController;
@@ -22,9 +24,13 @@ use App\Http\Controllers\Admin\SettingsController;
 use App\Http\Controllers\Admin\SmtpAccountController;
 use App\Http\Controllers\Admin\SmtpController;
 use App\Http\Controllers\Admin\SubsystemController;
+use App\Http\Controllers\Admin\SuppressionAdminController as AdminSuppressionController;
 use App\Http\Controllers\Admin\SystemController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\UserStatusController;
+use App\Http\Controllers\Admin\ValidationController as AdminValidationController;
+use App\Http\Controllers\Audience\ListController;
+use App\Http\Controllers\Audience\SuppressionController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\EmailVerificationNotificationController;
 use App\Http\Controllers\Auth\EmailVerificationPromptController;
@@ -35,6 +41,7 @@ use App\Http\Controllers\Auth\VerifyEmailController;
 use App\Http\Controllers\DiagnosticsController;
 use App\Http\Controllers\ExtractorController;
 use App\Http\Controllers\PendingFeatureController;
+use App\Http\Controllers\UnsubscribeController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -52,6 +59,27 @@ use Illuminate\Support\Facades\Route;
 Route::view('/', 'welcome')->name('home');
 
 Route::get('health', [DiagnosticsController::class, 'health'])->name('health');
+
+/*
+|--------------------------------------------------------------------------
+| Recipient unsubscribe
+|--------------------------------------------------------------------------
+|
+| Public, and permanently so. This is the one page a person who has never heard
+| of the product will ever see: a recipient clicking a link in a message. They
+| have no account and will never have one, so there is no authentication here and
+| none may be added — a link that requires signing in is a link that does not
+| work, and an unsubscribe requirement that is quietly not met looks met.
+|
+| GET renders and POST acts, which keeps mail-client link previewers, chat
+| clients and security scanners from unsubscribing somebody on their behalf.
+|
+*/
+
+Route::prefix('unsubscribe')->name('unsubscribe.')->group(function (): void {
+    Route::get('{token}', [UnsubscribeController::class, 'show'])->name('show');
+    Route::post('{token}', [UnsubscribeController::class, 'store'])->name('store');
+});
 
 /*
 |--------------------------------------------------------------------------
@@ -138,19 +166,40 @@ Route::middleware(['auth', 'confirmed'])->group(function (): void {
     Route::get('extractor/{extraction}', [ExtractorController::class, 'show'])->name('extractor.show');
     Route::get('extractor/{extraction}/download', [ExtractorController::class, 'download'])->name('extractor.download');
 
+    // Only ever applies to a task that has not started. A task already being
+    // processed is refused rather than half-cancelled — see PendingTaskQueue.
+    Route::post('extractor/{extraction}/cancel', [ExtractorController::class, 'cancel'])->name('extractor.cancel');
+
+    /*
+    | Lists, contacts and suppression.
+    |
+    | Real pages as of Stage 5B, replacing the shells that held these route
+    | names. Ownership is checked by scoping every lookup in the controller, so
+    | another tenant's record is a 404 rather than a forbidden page.
+    |
+    */
+    Route::prefix('lists')->name('lists.')->group(function (): void {
+        Route::get('/', [ListController::class, 'index'])->name('index');
+        Route::get('new', [ListController::class, 'create'])->name('create');
+        Route::post('/', [ListController::class, 'store'])->name('store');
+        Route::get('{list}', [ListController::class, 'show'])->name('show');
+        Route::get('{list}/edit', [ListController::class, 'edit'])->name('edit');
+        Route::put('{list}', [ListController::class, 'update'])->name('update');
+        Route::delete('{list}', [ListController::class, 'destroy'])->name('destroy');
+        Route::post('{list}/contacts', [ListController::class, 'addContacts'])->name('contacts.store');
+        Route::delete('{list}/contacts/{contact}', [ListController::class, 'removeContact'])->name('contacts.destroy');
+    });
+
+    Route::get('suppression', [SuppressionController::class, 'index'])->name('suppression.index');
+    Route::delete('suppression/{suppression}', [SuppressionController::class, 'destroy'])
+        ->name('suppression.destroy');
+
     Route::get('files', PendingFeatureController::class)
         ->defaults('section', 'files')->name('files.index');
     Route::get('files/new', PendingFeatureController::class)
         ->defaults('section', 'files')->defaults('record', 'new')->name('files.create');
     Route::get('files/{file}', PendingFeatureController::class)
         ->defaults('section', 'files')->name('files.show');
-
-    Route::get('lists', PendingFeatureController::class)
-        ->defaults('section', 'lists')->name('lists.index');
-    Route::get('lists/new', PendingFeatureController::class)
-        ->defaults('section', 'lists')->defaults('record', 'new')->name('lists.create');
-    Route::get('lists/{list}', PendingFeatureController::class)
-        ->defaults('section', 'lists')->name('lists.show');
 
     Route::get('templates', PendingFeatureController::class)
         ->defaults('section', 'templates')->name('templates.index');
@@ -168,8 +217,10 @@ Route::middleware(['auth', 'confirmed'])->group(function (): void {
     Route::get('campaigns/{campaign}/edit', PendingFeatureController::class)
         ->defaults('section', 'campaigns')->defaults('record', 'edit')->name('campaigns.edit');
 
-    Route::get('suppression', PendingFeatureController::class)
-        ->defaults('section', 'suppression')->name('suppression.index');
+    // `/suppression` is a real page as of Stage 5B. There is deliberately no
+    // staged shell left behind for it: a route that exists only to render a
+    // placeholder is one an operator can find and mistake for the real thing.
+
     Route::get('analytics', PendingFeatureController::class)
         ->defaults('section', 'analytics')->name('analytics.index');
 });
@@ -249,6 +300,49 @@ Route::middleware(['auth', 'confirmed', 'can:'.Permission::ADMIN_VIEW])
 
         Route::get('users/{user}/smtp', [SmtpAccountController::class, 'forUser'])->middleware('can:'.Permission::MAIL_ACCOUNTS_VIEW)->name('users.smtp');
         Route::get('deliverability', AdminDeliverabilityController::class)->middleware('can:'.Permission::DELIVERABILITY_VIEW)->name('deliverability.index');
+
+        /*
+        | Audience and validation.
+        |
+        | Four pages, each answering a different operational question, and none
+        | duplicating another:
+        |
+        |   audience      totals across tenants; no individual addresses
+        |   validation    why addresses are unclassified, and which tasks failed
+        |   lists         one tenant's lists, so a support question can be answered
+        |   suppression   the one page that can act on somebody else's audience
+        |
+        | There is deliberately no `/admin/tasks`. `/admin/jobs` and `/admin/runs`
+        | already report the queue, and a third page listing the same tasks in a
+        | different order would leave an operator unsure which was authoritative.
+        |
+        */
+        Route::get('audience', AdminAudienceController::class)
+            ->middleware('can:'.Permission::CONTACTS_VIEW)
+            ->name('audience.index');
+
+        Route::get('validation', AdminValidationController::class)
+            ->middleware('can:'.Permission::VALIDATION_VIEW)
+            ->name('validation.index');
+
+        Route::get('lists', [AdminListController::class, 'index'])
+            ->middleware('can:'.Permission::LISTS_VIEW)
+            ->name('lists.index');
+
+        // Read is one permission and mutation is another. Lifting a suppression
+        // is a decision about another customer's mail, and an operator should
+        // have to reach for a different authority to make it.
+        Route::prefix('suppression')->name('suppression.')->group(function (): void {
+            Route::get('/', [AdminSuppressionController::class, 'index'])
+                ->middleware('can:'.Permission::SUPPRESSION_VIEW)
+                ->name('index');
+            Route::post('/', [AdminSuppressionController::class, 'store'])
+                ->middleware('can:'.Permission::SUPPRESSION_MANAGE)
+                ->name('store');
+            Route::delete('{suppression}', [AdminSuppressionController::class, 'destroy'])
+                ->middleware('can:'.Permission::SUPPRESSION_MANAGE)
+                ->name('destroy');
+        });
 
         Route::prefix('system')->group(function (): void {
             Route::get('/', SystemController::class)->middleware('can:'.Permission::SYSTEM_VIEW)->name('system.index');

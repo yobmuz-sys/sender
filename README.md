@@ -11,15 +11,20 @@ long-running daemons and root access are **not** required at any point.
 
 ## Current status
 
-> **Stage 3E — secure single-URL extraction**
-> Pasted-text extraction runs on a bounded `sender:work` worker over the database
-> queue. One URL per extraction can now be fetched safely: scheme, port, DNS and
-> address checks, pinning against DNS rebinding, per-hop redirect validation,
-> streaming with a byte ceiling, and a capability that stays `UNKNOWN` until
-> `sender:verify-url` actually measures it. Multi-URL extraction, file upload,
-> other document formats and SMTP campaign sending remain future work.
+> **Stage 5B — recipient validation and audience controls**
+> Addresses an extraction finds are now checked, not just collected. A four-stage
+> pipeline — syntax, mail route, catch-all, SMTP recipient — records what it
+> actually observed and never records an address as inactive on evidence that
+> does not support it. Addresses become canonical contacts that every list points
+> at, consent is recorded as evidence rather than as a flag, suppression cannot be
+> undone by a re-import, and an unsubscribe link works without an account, takes
+> effect immediately and is idempotent. SMTP probing is **off by default**,
+> because shared hosting usually blocks outbound port 25; with it off, validation
+> honestly reports `UNKNOWN — verification blocked` and never invents a verdict.
+> Campaign sending remains future work.
 
-Stage 5A complete. 482 tests / 1400 assertions passing. Previous accepted baseline: `a3e4be4`.
+Stage 5B complete. 638 tests / 2037 assertions passing. Previous accepted
+baseline: `70b380a`.
 
 Implemented and tested:
 
@@ -52,13 +57,16 @@ Implemented and tested:
 | Encrypted SMTP credentials, never rendered after saving | done |
 | Sender-identity enforcement, per transport and per sending domain | done |
 | Sending-readiness findings, reported as evidence rather than a score | done |
+| Evidence-based recipient validation, with `UNKNOWN` distinguished from inactive | done |
+| Canonical contacts, lists, consent records and suppression | done |
+| Immediate, idempotent, unauthenticated unsubscribe | done |
 | Honest staged pages for features, plans, campaigns, API, billing, audit | done |
 | Page-completeness and navigation-integrity test suite | done |
 
 ### Known intentional limitations
 
-These are accepted consequences of the Stage 3B scope, not defects. None of them
-should be "fixed" by weakening a threshold or a check.
+These are accepted consequences of the platform's current scope, not defects. None
+of them should be "fixed" by weakening a threshold or a check.
 
 1. **`DEGRADED` on the developer machine.** Laragon's stock `php.ini` is below
    the platform's 256M / 10M requirements. This is exactly what the inspector
@@ -109,18 +117,39 @@ should be "fixed" by weakening a threshold or a check.
    land in an inbox rather than spam — that decision belongs to the receiving
    provider. There is no spam score, because no local calculation can produce an
    honest one. See [Sending health](#sending-health).
-12. **Recipient hygiene does not exist yet.** No recipient, list, consent,
-   suppression or unsubscribe records have been built. Sending readiness reports
-   these as `Not established` rather than as passes, so a fully configured
-   transport does not read as ready to send. This is the Stage 5B prerequisite,
-   and the reason the campaign engine is not built yet.
+12. **Validation is off unless you turn it on.** `SENDER_VALIDATION_SMTP_PROBING`
+    defaults to `false`, because shared hosting very often blocks outbound port
+    25 and a validator that cannot reach a mail server has nothing to report. With
+    probing off, every address that passes syntax and DNS is recorded as `UNKNOWN`
+    with the reason *verification blocked*. That is reported as such and excluded
+    from sending — never as active and never as inactive. `sender:diagnose` prints
+    the current setting.
+13. **Validation cannot prove delivery.** An SMTP `250` to a recipient check means
+    the receiving server will accept mail for that address. It does not mean the
+    message arrives, and it is reported as *likely active*, never as *active* or
+    *verified*. There is no accuracy percentage anywhere in this product, because
+    no such figure is defensible.
+14. **A catch-all domain cannot be resolved.** When a domain accepts mail for an
+    address that cannot exist, *acceptance proves nothing*, and every mailbox at
+    that domain is recorded as `UNKNOWN` rather than as likely active. This is the
+    most valuable single check in the pipeline and it costs one probe per domain
+    per cache window.
+15. **Consent is unknown by default, and stays that way.** A scraped or purchased
+    list arrives with no evidence that anybody agreed to be contacted, so consent
+    reads `Unknown` and the contact is excluded from sending. An operator's own
+    attestation is recorded and reported but never promotes a contact to
+    `Confirmed` — "you told us they agreed" is not the same as holding a record
+    that they did.
+16. **The suppression list cannot be undone by the UI.** `unsubscribed` and
+    `complaint` are terminal: `SuppressionList::clear()` returns `false` for both
+    and the platform offers no control that could undo them. Clearing an operator
+    suppression is the one case it will lift.
 
 **Not** implemented, and deliberately so at this stage: multi-URL extraction,
-file upload, XLSX/DOCX/PDF/XML parsing, MX and DNS validation of extracted
-addresses, campaign sending, recipients, lists, consent, suppression,
-unsubscribe processing, bounce and complaint feedback, rate-control
-implementation, analytics, plans, entitlements, usage tracking, PHP integration
-and billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
+file upload, XLSX/DOCX/PDF/XML parsing, campaign sending, bounce and complaint
+feedback ingestion, open and click tracking, rate-control implementation,
+warm-up, scoring, IP rotation, analytics, plans, entitlements, usage tracking,
+PHP integration and billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -234,6 +263,127 @@ Deliberately **not** built, and not planned in this form:
 When a transport has evidence of serious delivery problems, the platform reports
 it and stops using it. The recovery path is to repair the domain or provider
 reputation, or to configure a different relay you legitimately control.
+
+---
+
+## Audience and recipient validation
+
+Finding addresses is the easy half. Stage 5B is about what happens to them
+afterwards, and every decision in it is shaped by one rule:
+
+> **Maximise the precision of `CONFIRMED_INVALID`. Never classify uncertain
+> evidence as inactive.**
+
+Calling a live recipient inactive costs one address. Calling a dead one active
+costs a bounce, and on a shared host enough of them cost the sending reputation
+outright. So the pipeline is built so that only one kind of evidence can produce
+an invalid verdict.
+
+### The four stages
+
+| Stage | Question | A negative answer means |
+| --- | --- | --- |
+| Syntax | can this string be an address at all? | `CONFIRMED_INVALID` — deterministic, decided locally |
+| Mail route | does the domain publish MX, or an address for the implicit route? | `CONFIRMED_INVALID` only on NXDOMAIN or *exists but takes no mail* |
+| Catch-all | does the domain accept an address that cannot exist? | every mailbox at the domain becomes `UNKNOWN` |
+| Mailbox | does the recipient server accept this address? | `LIKELY_ACTIVE`, or `CONFIRMED_INVALID` on `5.1.1` |
+
+There is **no probe message**. Nothing is ever sent to a recipient to find out
+whether they exist.
+
+### Why a bare `550` is not an invalid verdict
+
+This is the single most consequential mapping in the product. RFC 5321 makes an
+unambiguous reply code optional, and the large providers answer `550` to *every*
+address rather than leak their user list to anyone willing to ask. So:
+
+| Reply | Verdict |
+| --- | --- |
+| `250` | `LIKELY_ACTIVE` |
+| `251` | `UNKNOWN` — forwarding is a routing statement, not an existence one |
+| `252` | `UNKNOWN` — the server says it cannot verify |
+| `4xx` | `UNKNOWN` — the server asked us to try again |
+| `550`, no enhanced code | `UNKNOWN` — a rejection is what anti-enumeration is built from |
+| `550` + `5.1.1` | `CONFIRMED_INVALID` |
+| `550` + `5.1.2` / `5.1.3` | `CONFIRMED_INVALID` |
+| `550` + `5.1.4` | `UNKNOWN` — explicitly ambiguous |
+| `550` + `5.7.x` | `UNKNOWN` — the server's policy, not the mailbox |
+| timeout / refused | `UNKNOWN` — nothing was learned |
+| domain accepts a synthetic address | `UNKNOWN` for the whole domain |
+
+Only four reasons may accompany `CONFIRMED_INVALID`: `invalid_syntax`,
+`domain_not_found`, `no_mail_route` and `mailbox_not_found`. That list is the
+formal accuracy rule, written as code, and the test suite asserts both directions
+— that each reply shape maps to the right verdict, and that nothing outside the
+allowlist can produce an invalid one.
+
+The statuses a customer sees are **Likely active**, **Confirmed inactive**,
+**Unknown** and **Risky**. There is no percentage and no guarantee anywhere,
+because no such figure is defensible. An address the platform could not check is
+reported as unknown and **excluded from sending by default**: not sending loses
+one recipient we might have reached, while sending risks a bounce and a provider
+signal held against the whole account.
+
+### Caching, because accuracy has to be affordable
+
+- **Mail route** — one DNS lookup per domain per window, cached in a table rather
+  than in memory so a worker and the page that renders the report are looking at
+  the same evidence, and so the work survives a deploy. `Unavailable` is never
+  cached: caching a resolver outage would classify a whole audience as unknown
+  for a day.
+- **Catch-all** — one probe per domain per window, from an address built from 32
+  hex characters of cryptographic randomness. A guessable probe address
+  (`test@example.com`) proves nothing, because a mail server may treat well-known
+  local parts specially.
+- **Mailbox** — one recipient check per mailbox until its evidence expires, held
+  on the canonical contact. A positive result expires in days; a
+  `CONFIRMED_INVALID` result is kept longer, because a mailbox that does not
+  exist is a stable fact. The mailbox cache is tenant-scoped; the DNS cache is
+  not, because a domain either publishes MX records or it does not.
+
+### Canonical contacts, lists, consent, suppression
+
+**One address is one contact per tenant.** Lists hold memberships, never copies,
+so a validation result, a consent record and a suppression recorded once apply to
+every list the contact is on. Duplicates are prevented by
+`unique(user_id, normalized_email)`, not by an `exists()` check — that window is
+where two concurrent pastes both see nothing.
+
+**Consent is evidence, derived, never a flag.** `Unknown`, `Confirmed` and
+`Withdrawn`. A withdrawal anywhere in the history wins over everything except a
+newer confirmation, and the comparison is on timestamps rather than on insertion
+order. `imported_with_user_attestation` is recorded, reported and searchable, and
+does not make anybody sendable.
+
+**Suppression cannot be undone by re-importing.** `unique(user_id, contact_id)`
+means there is one row per contact per tenant; recording twice is a no-op; and
+nothing that imports, extracts or lists a contact writes to that table at all. The
+recorded reason is never downgraded — a complaint stays a complaint.
+
+**Unsubscribe is immediate, idempotent and unauthenticated.** The token is 64
+characters of CSPRNG output, stored only as a SHA-256 digest, so nothing in the
+URL or in a leaked backup identifies a recipient. `GET` confirms, `POST` acts, so
+a mail client's link preview cannot unsubscribe somebody on their behalf. The
+suppression is written synchronously — there is no worker between the click and
+the record.
+
+### Pages
+
+| Path | Purpose |
+| --- | --- |
+| `/extractor`, `/extractor/{task}` | Task list and report, with a per-stage badge and honest progress |
+| `/lists`, `/lists/new`, `/lists/{list}` | Lists, their members, and what is actually sendable from each |
+| `/suppression` | Your suppressions, with the reasons that can and cannot be lifted |
+| `/unsubscribe/{token}` | Public. Confirm and unsubscribe. No account, ever |
+| `/admin/audience` | Contacts, classifications, tasks and suppressions across tenants |
+| `/admin/validation` | What could not be classified, and why; failed and stuck tasks |
+| `/admin/lists`, `/admin/suppression` | The same, for an operator who has to act |
+
+`/admin/validation` exists instead of a new `/admin/tasks` because `/admin/jobs`
+and `/admin/runs` already report the queue. A third page listing the same tasks
+in a different order would leave an operator unsure which one was authoritative.
+There is deliberately **no send button** anywhere: an audience that has never been
+checked for consent is not an audience anybody should be able to mail.
 
 ---
 
@@ -392,6 +542,42 @@ evidence is durable: an operator checking a broken deployment previously saw
 `UNKNOWN`, the same answer as a host that had never been configured, with
 nothing pointing at the cause.
 
+### Validation on shared hosting
+
+Recipient validation needs outbound port 25, which most shared hosts block. It is
+therefore **off by default**:
+
+```
+SENDER_VALIDATION_SMTP_PROBING=false
+```
+
+With it off, validation still runs its syntax and DNS stages — which cost
+nothing and are frequently conclusive — and everything else is reported as
+`UNKNOWN` with the reason *verification blocked*. The task finishes, the counts
+are honest, and nothing is ever recorded as inactive on that basis.
+
+`php artisan sender:diagnose` prints the current setting as
+`recipient validation probing`. If your host permits outbound port 25, set the
+variable to `true`; if it does not, leave it off. The remaining knobs —
+`SENDER_VALIDATION_SMTP_TIMEOUT_SECONDS`, the three cache TTLs,
+`SENDER_VALIDATION_BATCH_SIZE` and `SENDER_VALIDATION_MAX_PER_PASS` — are in
+[docs/DEPLOYMENT_CPANEL.md](docs/DEPLOYMENT_CPANEL.md).
+
+### One task at a time per account
+
+An account runs one processing task at a time; a second paste waits its turn and
+is dispatched by the first task finishing. Validation is the expensive half of
+the pipeline, and two of them at once on a shared host is twice the outbound
+connections. Different accounts are never serialised against each other — one
+tenant's backlog must not be able to stall another's work.
+
+This is sequenced by dispatch order rather than by a lock: a waiting task's job
+is simply not queued until its predecessor reaches a terminal state. There is no
+lock to take, no lock to time out and no worker invocation spent spinning. The
+trade-off is that a task whose worker is killed without `failed()` running blocks
+the account until the queue's `retry_after` re-reserves the job and the retry
+count exhausts — bounded and recoverable, and visible on the task's own badge.
+
 Until the first run arrives, cron reports `UNKNOWN`. It is never reported
 `UNAVAILABLE` from absence, because there is no positive evidence to justify it.
 A recent *successful* run gives `READY`; stale evidence gives `DEGRADED`. The
@@ -482,6 +668,7 @@ npm run build   # production build, committed to public/build
 | `/health` | JSON readiness verdict — the aggregate status only, no host detail |
 | `/up` | Laravel liveness probe, answering without application code |
 | `/register`, `/login`, `/forgot-password`, `/reset-password/{token}` | Authentication |
+| `/unsubscribe/{token}` | Confirm (GET) and act (POST). Unauthenticated, immediate |
 
 `/health` returns exactly `status` and `capability`. Anything more would let an
 unauthenticated caller enumerate the host.
@@ -499,11 +686,14 @@ a confirmed address.
 | `/email/verify`, `/email/verify/{id}/{hash}` | Address confirmation; `/email/verification-notification` resends (POST) |
 | `/account/profile` | Name, locale, time zone (PATCH) |
 | `/account/security` | Password change (PUT) |
-| `/extractor` | Extraction: create, history, detail, CSV download. Requires a confirmed address and the worker |
+| `/extractor`, `/extractor/new`, `/extractor/{task}`, `/extractor/{task}/csv` | Extraction: create, history, report, CSV download. Requires a confirmed address and the worker |
+| `/lists`, `/lists/new`, `/lists/{list}`, `/{list}/edit` | Named lists, their members, and what is sendable from each |
+| `/lists/{list}/contacts`, `/contacts/{contact}` | Add pasted addresses (POST), remove one member (DELETE) |
+| `/suppression`, `/suppression/{row}` | Your suppressions and the reasons that can be lifted |
 | `/account/smtp`, `/account/smtp/create`, `/account/smtp/{account}`, `/{account}/edit` | Your SMTP transports |
 | `/account/smtp/{account}/verify`, `/send-test` | Verification actions, rate limited |
 | `/account/deliverability` | Sending health and readiness findings |
-| `/files`, `/lists`, `/templates`, `/campaigns`, `/suppression`, `/analytics` | Product surfaces — staged shells, see the limitation above |
+| `/files`, `/templates`, `/campaigns`, `/analytics` | Product surfaces — staged shells, see the limitation above |
 
 ### Administration
 
@@ -519,6 +709,11 @@ Each route requires its own permission; an account without it receives 403.
 | `/admin/plans` | `plans.view` |
 | `/admin/campaigns` | `campaigns.view` |
 | `/admin/jobs`, `/admin/runs` | `jobs.view` |
+| `/admin/audience` | `contacts.view` |
+| `/admin/validation` | `validation.view` |
+| `/admin/lists` | `lists.view` |
+| `/admin/suppression` | `suppression.view` |
+| `/admin/suppression` (POST), `/admin/suppression/{row}` (DELETE) | `suppression.manage` |
 | `/admin/jobs/{run}/retry`, `/forget` | `jobs.manage` |
 | `/admin/smtp`, `/admin/smtp/verification` | `system.view` |
 | `/admin/smtp/verify`, `/admin/smtp/send` | `system.manage` |

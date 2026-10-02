@@ -43,7 +43,7 @@ class UrlExtractionTest extends TestCase
 
         $this->assertSame('url', $extraction->source_type);
         $this->assertSame('https://example.com/team', $extraction->source_ref);
-        $this->assertSame(ExtractionStatus::Pending, $extraction->status);
+        $this->assertSame(ExtractionStatus::Queued, $extraction->status);
 
         // The page is not stored. It is fetched later, on the worker, and must
         // not accumulate in the database.
@@ -144,7 +144,10 @@ class UrlExtractionTest extends TestCase
 
         $extraction->refresh();
 
-        $this->assertSame(ExtractionStatus::Completed, $extraction->status);
+        // Extraction and validation are two stages. With the sync connection the
+        // queued validation stage runs inline, so the task ends at Ready rather
+        // than pausing at Validating.
+        $this->assertSame(ExtractionStatus::Ready, $extraction->status);
         $this->assertSame(2, $extraction->found_count);
 
         $this->assertDatabaseCount('extraction_results', 2);
@@ -364,8 +367,8 @@ class UrlExtractionTest extends TestCase
 
         $html = $response->getContent();
 
-        $this->assertStringContainsString('Paste text', $html);
-        $this->assertStringContainsString('Single URL', $html);
+        $this->assertStringContainsString('Paste a list', $html);
+        $this->assertStringContainsString('One web page', $html);
 
         // Implemented capabilities are stated; unimplemented ones are denied
         // rather than advertised.
@@ -375,7 +378,7 @@ class UrlExtractionTest extends TestCase
         // page that had not considered them.
         $this->assertStringContainsString('not available yet', $html);
         $this->assertStringContainsString('File uploads are not available yet', $html);
-        $this->assertStringContainsString('multiple URLs', $html);
+        $this->assertStringContainsString('multiple pages per task', $html);
 
         // 100 URLs must not be advertised: one extraction is one URL, and a
         // larger figure here would promise batching that does not exist.
@@ -445,7 +448,7 @@ class UrlExtractionTest extends TestCase
             app(SecureUrlFetcher::class),
         );
 
-        $this->assertSame(ExtractionStatus::Completed, $extraction->refresh()->status);
+        $this->assertSame(ExtractionStatus::Ready, $extraction->refresh()->status);
 
         Http::assertSent(function (Request $request): bool {
             $this->assertStringNotContainsString('token', $request->url());
@@ -468,7 +471,7 @@ class UrlExtractionTest extends TestCase
                 ? substr($url, 0, (int) strpos($url, '?'))
                 : $url,
             'content' => null,
-            'status' => ExtractionStatus::Pending->value,
+            'status' => ExtractionStatus::Queued->value,
             'found_count' => 0,
             'processed_count' => 0,
             'failed_count' => 0,

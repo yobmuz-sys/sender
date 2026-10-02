@@ -24,6 +24,7 @@ class Extraction extends Model
 
     protected $fillable = [
         'user_id',
+        'name',
         'source_type',
         'source_ref',
         'content',
@@ -31,14 +32,24 @@ class Extraction extends Model
         'found_count',
         'processed_count',
         'failed_count',
+        'validation_processed_count',
+        'confirmed_invalid_count',
+        'likely_active_count',
+        'unknown_count',
+        'risky_count',
         'error',
     ];
 
     protected $attributes = [
-        'status' => ExtractionStatus::Pending->value,
+        'status' => ExtractionStatus::Queued->value,
         'found_count' => 0,
         'processed_count' => 0,
         'failed_count' => 0,
+        'validation_processed_count' => 0,
+        'confirmed_invalid_count' => 0,
+        'likely_active_count' => 0,
+        'unknown_count' => 0,
+        'risky_count' => 0,
     ];
 
     protected function casts(): array
@@ -48,8 +59,15 @@ class Extraction extends Model
             'found_count' => 'integer',
             'processed_count' => 'integer',
             'failed_count' => 'integer',
+            'validation_processed_count' => 'integer',
+            'confirmed_invalid_count' => 'integer',
+            'likely_active_count' => 'integer',
+            'unknown_count' => 'integer',
+            'risky_count' => 'integer',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
+            'validation_started_at' => 'datetime',
+            'validation_completed_at' => 'datetime',
         ];
     }
 
@@ -80,5 +98,24 @@ class Extraction extends Model
     public function isTerminal(): bool
     {
         return $this->status->isTerminal();
+    }
+
+    /**
+     * What this task should be called on a badge.
+     *
+     * The name the customer gave it, or a description of where it came from. An
+     * incrementing integer is a database primary key and is not a label a person
+     * can recognise — "task 41" tells them nothing they can act on, and the
+     * source reference is the one thing on the row they will recognise.
+     */
+    public function displayName(): string
+    {
+        if ($this->name !== null && trim($this->name) !== '') {
+            return trim($this->name);
+        }
+
+        return $this->source_type === 'url'
+            ? (string) ($this->source_ref ?: 'A webpage')
+            : 'Pasted text';
     }
 }

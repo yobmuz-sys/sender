@@ -9,6 +9,7 @@ use App\Domain\Extraction\ExtractionSource;
 use App\Domain\Extraction\ExtractionStatus;
 use App\Domain\Extraction\Extractor;
 use App\Domain\Extraction\FileExtractionSource;
+use App\Domain\Extraction\PendingTaskQueue;
 use App\Domain\Extraction\Url\FetchedResource;
 use App\Domain\Extraction\Url\SecureUrlFetcher;
 use App\Domain\Extraction\Url\UrlFetchException;
@@ -77,8 +78,15 @@ class ProcessExtractionJob implements ShouldQueue
             throw new ModelNotFoundException('extraction '.$this->extractionId.' no longer exists');
         }
 
+        if (in_array($extraction->status, [ExtractionStatus::Cancelled, ExtractionStatus::Ready], true)) {
+            // The task was abandoned or finished between dispatch and pickup.
+            // Picking it up anyway would extract into a cancelled task's results,
+            // which is precisely what cancelling is meant to prevent.
+            return;
+        }
+
         $extraction->forceFill([
-            'status' => ExtractionStatus::Processing->value,
+            'status' => ExtractionStatus::Extracting->value,
             'started_at' => now(),
             'completed_at' => null,
             'error' => null,
@@ -108,12 +116,18 @@ class ProcessExtractionJob implements ShouldQueue
                 'error' => $exception->reason->value,
             ])->save();
 
+            // A refused URL still releases the account. Leaving it holding the
+            // queue would mean one permanently invalid URL parked every task
+            // behind it, and a customer who pasted one bad address would find
+            // their whole queue stopped.
+            app(PendingTaskQueue::class)->dispatchNext((int) $extraction->user_id);
+
             // Not rethrown: there is no retry that could succeed, and a job that
             // always fails would eventually land in failed_jobs as noise.
             return;
         } catch (Throwable $exception) {
             $extraction->forceFill([
-                'status' => ExtractionStatus::Processing->value,
+                'status' => ExtractionStatus::Extracting->value,
                 'error' => $this->safeMessage($exception),
             ])->save();
 
@@ -126,13 +140,28 @@ class ProcessExtractionJob implements ShouldQueue
             $resource?->remove();
         }
 
+        // Extraction is finished, so `completed_at` is deliberately *not* set.
+        // The task as a whole is not finished — checking is a separate stage with
+        // its own clock, and a report that said "finished" before the expensive
+        // half had run would be the exact dishonesty this pipeline's split exists
+        // to prevent.
+        //
+        // The status moves straight to `validating` rather than back to `queued`:
+        // checking is dispatched immediately below, and a badge reading "waiting"
+        // while ten thousand addresses sit unchecked and queued would send the
+        // customer looking for a queue position that does not exist.
         $extraction->forceFill([
-            'status' => ExtractionStatus::Completed->value,
-            'completed_at' => now(),
+            'status' => ExtractionStatus::Validating->value,
             'processed_count' => $counts['processed'],
             'found_count' => $counts['found'],
             'failed_count' => 0,
         ])->save();
+
+        // The addresses exist; the checking of them is its own bounded job. Only
+        // an identifier crosses this boundary — never the addresses themselves,
+        // which would put a ten-thousand-row list into the `jobs` table and into
+        // every retry of it.
+        ValidateExtractionJob::dispatch($extraction->id);
     }
 
     /**
@@ -179,6 +208,16 @@ class ProcessExtractionJob implements ShouldQueue
                 'completed_at' => now(),
                 'error' => $this->safeMessage($exception),
             ]);
+
+        // The account is no longer held by this task, so whatever is queued
+        // behind it may begin. Without this, one failure would park every
+        // subsequent task behind it indefinitely — which is a considerably worse
+        // outcome for the customer than the failure that caused it.
+        $extraction = Extraction::query()->find($this->extractionId);
+
+        if ($extraction !== null) {
+            app(PendingTaskQueue::class)->dispatchNext((int) $extraction->user_id);
+        }
     }
 
     /**

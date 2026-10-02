@@ -29,9 +29,14 @@ final class ProductNavigation
             new NavigationItem('Mail transports', 'account.smtp.index', matchPrefix: true),
             new NavigationItem('Sending health', 'account.deliverability.index'),
             new NavigationItem('Files', 'files.index', matchPrefix: true),
+            // Real as of Stage 5B. A list holds canonical contacts rather than
+            // copies, and is the unit a later campaign stage will select from.
             new NavigationItem('Lists', 'lists.index', matchPrefix: true),
             new NavigationItem('Templates', 'templates.index', matchPrefix: true),
             new NavigationItem('Campaigns', 'campaigns.index', matchPrefix: true),
+            // Real: addresses this account will never contact, with the reason
+            // for each. Every unsubscribe, bounce and complaint lands here and
+            // applies to every list, import and future campaign.
             new NavigationItem('Suppression', 'suppression.index'),
             new NavigationItem('Analytics', 'analytics.index'),
         ];

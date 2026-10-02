@@ -30,10 +30,11 @@ class ExtractionWorkflowTest extends TestCase
             ->assertRedirect();
 
         // The queue runs inline under QUEUE_CONNECTION=sync, so reaching
-        // 'completed' here is the assertion that the job is actually dispatched
-        // and does work. It previously asserted 'pending', which only held
-        // because nothing was ever dispatched.
-        $this->assertDatabaseHas('extractions', ['user_id' => auth()->id(), 'status' => 'completed']);
+        // 'ready' here is the assertion that both the extraction job and the
+        // validation job that follows it are actually dispatched and do work.
+        // It previously asserted 'pending', which only held because nothing was
+        // ever dispatched.
+        $this->assertDatabaseHas('extractions', ['user_id' => auth()->id(), 'status' => 'ready']);
         $this->assertDatabaseCount('extraction_results', 2);
 
         $extraction = Extraction::query()->first();
@@ -74,7 +75,7 @@ class ExtractionWorkflowTest extends TestCase
     public function test_a_retry_does_not_duplicate_extraction_results(): void
     {
         $user = User::factory()->role(Role::User)->create();
-        $extraction = Extraction::factory()->for($user)->state(['status' => 'pending'])->create();
+        $extraction = Extraction::factory()->for($user)->state(['status' => 'queued'])->create();
 
         $extractor = Extractor::fromConfiguration();
 

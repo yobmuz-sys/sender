@@ -26,19 +26,19 @@ class ExtractionStateTest extends TestCase
 {
     public function test_an_extraction_starts_pending_with_no_timestamps(): void
     {
-        $extraction = Extraction::factory()->pending()->create();
+        $extraction = Extraction::factory()->queued()->create();
 
-        $this->assertSame(ExtractionStatus::Pending, $extraction->status);
+        $this->assertSame(ExtractionStatus::Queued, $extraction->status);
         $this->assertNull($extraction->started_at);
         $this->assertNull($extraction->completed_at);
         $this->assertSame(0, $extraction->found_count);
         $this->assertSame(0, $extraction->processed_count);
     }
 
-    public function test_a_successful_run_moves_pending_to_processing_to_completed(): void
+    public function test_a_successful_run_moves_queued_to_extracting_to_validating_to_ready(): void
     {
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Pending->value,
+            'status' => ExtractionStatus::Queued->value,
             'content' => "alpha@example.com\nbeta@example.com\n",
         ]);
 
@@ -46,7 +46,10 @@ class ExtractionStateTest extends TestCase
 
         $extraction->refresh();
 
-        $this->assertSame(ExtractionStatus::Completed, $extraction->status);
+        // Under the sync connection the queued validation stage runs inline, so
+        // the task is observed at the end of the pipeline rather than paused in
+        // the middle of it.
+        $this->assertSame(ExtractionStatus::Ready, $extraction->status);
         $this->assertNotNull($extraction->started_at);
         $this->assertNotNull($extraction->completed_at);
         $this->assertTrue($extraction->completed_at->greaterThanOrEqualTo($extraction->started_at));
@@ -57,7 +60,7 @@ class ExtractionStateTest extends TestCase
     public function test_a_retryable_failure_is_not_exposed_as_a_terminal_state(): void
     {
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Pending->value,
+            'status' => ExtractionStatus::Queued->value,
             'content' => 'alpha@example.com',
         ]);
 
@@ -95,7 +98,7 @@ class ExtractionStateTest extends TestCase
     public function test_a_retryable_failure_leaves_no_completion_timestamp(): void
     {
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Pending->value,
+            'status' => ExtractionStatus::Queued->value,
             'content' => 'alpha@example.com',
         ]);
 
@@ -118,7 +121,7 @@ class ExtractionStateTest extends TestCase
     public function test_a_throwing_job_records_a_failure_rather_than_claiming_success(): void
     {
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Pending->value,
+            'status' => ExtractionStatus::Queued->value,
             'content' => 'alpha@example.com',
         ]);
 
@@ -152,7 +155,7 @@ class ExtractionStateTest extends TestCase
 
     public function test_a_failure_message_is_reduced_before_it_is_persisted(): void
     {
-        $extraction = Extraction::factory()->create(['status' => ExtractionStatus::Pending->value]);
+        $extraction = Extraction::factory()->create(['status' => ExtractionStatus::Queued->value]);
 
         (new ProcessExtractionJob($extraction->id))
             ->failed(new RuntimeException('failed connecting with password=hunter2 to db'));
@@ -172,24 +175,24 @@ class ExtractionStateTest extends TestCase
         $this->actingAs($extraction->user)
             ->get(route('extractor.show', $extraction))
             ->assertOk()
-            ->assertSee('This extraction failed')
+            ->assertSee('This task did not finish')
             ->assertSee('could not read the stored content');
     }
 
     public function test_a_pending_extraction_explains_that_it_is_queued(): void
     {
-        $extraction = Extraction::factory()->create(['status' => ExtractionStatus::Pending->value]);
+        $extraction = Extraction::factory()->create(['status' => ExtractionStatus::Queued->value]);
 
         $this->actingAs($extraction->user)
             ->get(route('extractor.show', $extraction))
             ->assertOk()
-            ->assertSee('Waiting to be processed');
+            ->assertSee('Waiting to start');
     }
 
     public function test_a_completed_extraction_with_no_addresses_says_so(): void
     {
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Completed->value,
+            'status' => ExtractionStatus::Validating->value,
             'found_count' => 0,
             'processed_count' => 0,
             'content' => 'no addresses in this text at all',
@@ -234,7 +237,7 @@ class ExtractionStateTest extends TestCase
     public function test_results_are_paginated_rather_than_eager_loaded(): void
     {
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Completed->value,
+            'status' => ExtractionStatus::Validating->value,
             'found_count' => 150,
         ]);
 
@@ -260,7 +263,7 @@ class ExtractionStateTest extends TestCase
     public function test_the_csv_download_streams_every_result_not_just_the_first_page(): void
     {
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Completed->value,
+            'status' => ExtractionStatus::Validating->value,
             'found_count' => 150,
         ]);
 
@@ -272,7 +275,7 @@ class ExtractionStateTest extends TestCase
             ->get(route('extractor.download', $extraction));
 
         $response->assertOk();
-        $response->assertDownload('extraction-'.$extraction->id.'.csv');
+        $response->assertDownload('audience-'.$extraction->id.'.csv');
 
         $body = $response->streamedContent();
 

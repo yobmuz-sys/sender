@@ -162,6 +162,17 @@ Rules that matter in production:
   does not have, and the inspector will say so.
 - `.env` must not be committed to Git and must be readable only by the account.
 
+### Optional: recipient validation
+
+```ini
+# Off by default — most shared hosts block outbound port 25.
+SENDER_VALIDATION_SMTP_PROBING=false
+```
+
+Setting this to `true` on a host that blocks port 25 gains nothing and produces
+confusing reports. Ask your host first. Full detail is in
+[Recipient validation on shared hosting](#recipient-validation-on-shared-hosting).
+
 ---
 
 ## 5. Migrate and verify
@@ -282,6 +293,17 @@ when `DB_QUEUE_RETRY_AFTER` is less than the worker runtime plus the margin.
 Starting anyway would let the same job be handed to a second worker while the
 first still held it. `sender:diagnose` reports this as
 `queue reservation window`.
+
+**A large extraction takes several cron entries, by design.** Finding addresses
+and checking them are two separate jobs, and the checking job processes at most
+`SENDER_VALIDATION_MAX_PER_PASS` results per invocation before re-queueing itself.
+A ten-thousand-address list therefore finishes across many runs rather than
+overrunning one. The task's own badge shows the stage and an honest progress
+figure, so an operator watching the queue is looking at the same numbers the
+customer is.
+
+One task runs per account at a time. A second paste waits behind the first and
+starts when it finishes; different accounts never wait on each other.
 
 Each run appends a row to `scheduled_runs` recording the command, its duration
 and a redacted failure message, so you can inspect the history directly in the
@@ -484,7 +506,109 @@ or an administrator legitimately controls.
 
 ### Before a tenant can send
 
-Recipients, consent, suppression and unsubscribe handling are not built yet.
-`/account/deliverability` reports each as **Not established** rather than as a
-pass, so a fully configured and verified transport does not read as ready to send
-mail to anyone. Campaigns remain unavailable until that stage lands.
+Recipients, consent, suppression and unsubscribe handling were built in Stage 5B
+and are real, so `/account/deliverability` no longer reports them as missing.
+Campaigns remain unavailable: nothing in the platform sends mail, and there is
+deliberately no send button anywhere.
+
+What the audience layer requires of the host is one thing — **outbound port 25** —
+and it is optional. See below.
+
+---
+
+## Recipient validation on shared hosting
+
+Extracted addresses are checked by a four-stage pipeline: syntax, mail route,
+catch-all, and an SMTP recipient check. The first two cost nothing and need no
+special permission. The last two speak SMTP to other people's mail servers on
+port 25, which most shared hosts block.
+
+### It is off by default, and that is the right default
+
+```ini
+SENDER_VALIDATION_SMTP_PROBING=false
+```
+
+With it off:
+
+- syntax and DNS still run, and a definitive failure there is still reported as
+  `CONFIRMED_INVALID`;
+- everything else is recorded as `UNKNOWN` with the reason *verification
+  blocked*;
+- **nothing is ever recorded as inactive on that basis**, and nothing is recorded
+  as active either;
+- the task still finishes, so the report and the badge show real numbers.
+
+That is the honest answer rather than a degraded one: the platform is not allowed
+to ask a mail server whether a mailbox exists, and it declines to guess.
+
+`sender:diagnose` prints the current setting as `recipient validation probing`.
+
+### Turning it on
+
+Ask your host whether outbound port 25 is permitted to your account. Most shared
+hosts block it by default and some will not lift the block at all. If it is
+permitted:
+
+```ini
+SENDER_VALIDATION_SMTP_PROBING=true
+SENDER_VALIDATION_SMTP_TIMEOUT_SECONDS=5
+```
+
+If it is not, leave the switch off. There is no partial mode: the pipeline either
+may ask or may not.
+
+### Knobs worth knowing
+
+| Variable | Default | Why it matters |
+| --- | --- | --- |
+| `SENDER_VALIDATION_SMTP_TIMEOUT_SECONDS` | 5 | Per-server budget. Keep it well below `SENDER_MAX_WORKER_RUNTIME_SECONDS`: a mail server that stops answering must not consume the worker's whole budget, because the queue's reservation invariant depends on a job finishing inside its `retry_after`. |
+| `SENDER_VALIDATION_DOMAIN_CACHE_TTL_SECONDS` | 21600 (6 h) | How long a domain's MX is trusted. |
+| `SENDER_VALIDATION_CATCH_ALL_CACHE_TTL_SECONDS` | 259200 (3 d) | How long "this domain accepts anything" is remembered. Shorter than the route window on purpose, so a domain that turns catch-all off is noticed. |
+| `SENDER_VALIDATION_MAILBOX_CACHE_TTL_SECONDS` | 604800 (7 d) | How long a *likely active* result is trusted. A mailbox's answer can change between two messages. |
+| `SENDER_VALIDATION_INVALID_CACHE_TTL_SECONDS` | 2592000 (30 d) | How long a *confirmed invalid* result is trusted. A mailbox that does not exist is a stable fact, so this is deliberately longer. |
+| `SENDER_VALIDATION_MAX_PER_PASS` | 150 | Results checked per worker invocation before the job re-queues itself. |
+| `SENDER_VALIDATION_BATCH_SIZE` | 50 | Rows written per batch. |
+
+**Raising the TTLs is the wrong way to make validation faster.** The DNS and
+catch-all caches already bound the work to the number of *domains* in a list
+rather than the number of addresses, which is what makes a ten-thousand-address
+list cost the same per worker invocation as a ten-address one.
+
+### Cost and etiquette
+
+Validation asks *other people's* mail servers one question per address. On a
+shared host that is the behaviour which gets an outbound IP blocked, so:
+
+- it is off unless you deliberately turn it on;
+- one catch-all probe per domain per cache window, sent to a random address that
+  cannot exist;
+- no message is ever delivered to a recipient to find out whether they exist.
+
+If your provider starts rate-limiting you, `sender:diagnose` and
+`/admin/validation` will show it: a rise in `catch_all`,
+`verification_blocked` or `policy_rejection` is a change in the outside world,
+and that page is the only place it becomes visible.
+
+### What a result means
+
+The customer-facing statuses are **Likely active**, **Confirmed inactive**,
+**Unknown** and **Risky**. Read them as:
+
+- **Likely active** — the receiving server said it will accept mail for this
+  address. It did not say the message arrives.
+- **Confirmed inactive** — a deterministic local check, or an enhanced status of
+  `5.1.1`/`5.1.2`/`5.1.3`. Nothing else can produce it. In particular a bare
+  `550` cannot, because providers answer `550` to every address rather than leak
+  their user list.
+- **Unknown** — the platform could not reach a conclusion. This is the common
+  case on a host with port 25 blocked, and it is never reported as inactive.
+
+There is no accuracy percentage anywhere in the product and none should be added:
+no such figure is defensible, and quoting one would be a claim the platform
+cannot support.
+
+**Unknown addresses are excluded from sending by default.** That is a policy
+choice, not a limitation: not sending risks losing one recipient we might have
+reached, while sending risks a bounce, a complaint and a provider signal held
+against the whole account.

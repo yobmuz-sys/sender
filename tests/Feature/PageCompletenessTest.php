@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Domain\Users\Enums\Role;
 use App\Domain\Users\Permission;
+use App\Models\ContactList;
 use App\Models\User;
 use App\Support\Navigation\AdminNavigation;
 use App\Support\Navigation\ProductNavigation;
@@ -79,7 +80,7 @@ class PageCompletenessTest extends TestCase
             'files record' => ['/files/abc'],
             'lists' => ['/lists'],
             'lists new' => ['/lists/new'],
-            'lists record' => ['/lists/abc'],
+            'lists record' => ['/lists/1'],
             'templates' => ['/templates'],
             'templates new' => ['/templates/new'],
             'templates record' => ['/templates/abc'],
@@ -111,6 +112,10 @@ class PageCompletenessTest extends TestCase
             'campaigns' => ['/admin/campaigns', Permission::CAMPAIGNS_VIEW],
             'jobs' => ['/admin/jobs', Permission::JOBS_VIEW],
             'runs' => ['/admin/runs', Permission::JOBS_VIEW],
+            'audience' => ['/admin/audience', Permission::CONTACTS_VIEW],
+            'validation' => ['/admin/validation', Permission::VALIDATION_VIEW],
+            'lists' => ['/admin/lists', Permission::LISTS_VIEW],
+            'suppression' => ['/admin/suppression', Permission::SUPPRESSION_VIEW],
             'smtp' => ['/admin/smtp', Permission::SYSTEM_VIEW],
             'system' => ['/admin/system', Permission::SYSTEM_VIEW],
             'system diagnostics' => ['/admin/system/diagnostics', Permission::SYSTEM_VIEW],
@@ -168,7 +173,16 @@ class PageCompletenessTest extends TestCase
     #[DataProvider('accountPages')]
     public function test_every_account_page_renders_for_a_signed_in_account(string $path): void
     {
-        $this->actingAs(User::factory()->create())
+        $user = User::factory()->create();
+
+        // A record page needs a record the account actually owns. A slug-shaped
+        // path would render a shell, but lists are real rows now, and an empty
+        // detail page proves nothing about the real one.
+        if ($path === '/lists/1') {
+            ContactList::factory()->for($user)->create();
+        }
+
+        $this->actingAs($user)
             ->get($path)
             ->assertOk();
     }
@@ -318,13 +332,21 @@ class PageCompletenessTest extends TestCase
     }
 
     /**
-     * Parameters substituted into a shell are reflected, not silently dropped.
+     * The record a detail page was asked for is named on the page.
+     *
+     * A shell that renders identically whatever it was asked for cannot be
+     * checked by the customer, and a list page that does not say which list is
+     * open is indistinguishable from a bug when two tabs are open.
      */
     public function test_a_parameterised_shell_reports_which_record_it_was_asked_for(): void
     {
-        $this->actingAs(User::factory()->create())
-            ->get('/lists/my-list')
+        $user = User::factory()->create();
+        $list = ContactList::factory()->for($user)->create(['name' => 'Renewals 2026']);
+
+        $this->actingAs($user)
+            ->get("/lists/{$list->id}")
             ->assertOk()
+            ->assertSee('Renewals 2026')
             ->assertSee('Lists');
     }
 

@@ -7,13 +7,28 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
-> **Stage 5A — mail transport, sender identity and deliverability foundation**
-> Tenants and administrators can each configure SMTP transports; credentials are
-> encrypted at rest and never rendered back; the From address is bound to the
-> authenticated username; transports are built per account rather than by mutating
-> global mail configuration; SMTP hosts are subject to the same global-routability
-> policy as submitted URLs; and `DeliveryReadiness` reports PASS/WARN/BLOCK/
-> UNKNOWN evidence rather than a score. No campaign sends mail yet.
+> **Stage 5B — recipient validation and audience controls**
+> Addresses an extraction finds are checked, not merely collected. A four-stage
+> pipeline — syntax, mail route, catch-all, SMTP recipient — records what it
+> observed, and only deterministic local checks or an allowlisted `5.1.x` status
+> can produce `CONFIRMED_INVALID`; a timeout, a `4xx`, a `252`, a bare `550`, a
+> catch-all domain and an unreachable resolver are all `UNKNOWN`. Addresses become
+> canonical contacts that lists point at rather than copy, consent is recorded as
+> evidence and derived rather than stored as a flag, suppression is enforced by a
+> database constraint so a re-import cannot undo it, and the unsubscribe link is
+> opaque, immediate, idempotent and unauthenticated. SMTP probing is **off by
+> default**, because shared hosting usually blocks outbound port 25; with it off,
+> validation reports `UNKNOWN — verification blocked` and invents nothing. There is
+> no send button anywhere and no accuracy percentage, because neither is
+> defensible.
+>
+> **Stage 5A** delivered mail transports, sender identity and deliverability
+> preflight: tenants and administrators can each configure SMTP transports;
+> credentials are encrypted at rest and never rendered back; the From address is
+> bound to the authenticated username; transports are built per account rather
+> than by mutating global mail configuration; SMTP hosts are subject to the same
+> global-routability policy as submitted URLs; and `DeliveryReadiness` reports
+> PASS/WARN/BLOCK/UNKNOWN evidence rather than a score.
 >
 > **Stage 3E** delivered secure single-URL extraction:
 > Pasted text and one URL per extraction, both on the bounded `sender:work`
@@ -28,25 +43,23 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 > produce a `READY` cron verdict; and a retryable extraction failure briefly
 > presented as terminal.
 
-**Stage 3A-3E complete. Two source types run in production; a general-purpose job
-engine still does not exist.**
+**Stage 5A-5B complete. Addresses are validated and the audience is auditable;
+nothing sends mail yet.**
 
-Stage 5A complete. 482 tests / 1400 assertions passing. Previous accepted baseline: `a3e4be4`.
+Stage 5B complete. 638 tests / 2037 assertions passing. Previous accepted baseline: `70b380a`.
 
-## The next objective: mail, not more extraction
+## The next objective: sending
 
-Multi-URL extraction was the previous proposed next stage. It is **deferred**.
-The product objective is a multi-tenant sending platform, so the binding
-constraint is no longer how much text can be extracted — it is whether the
-platform has somewhere legitimate to send from. Every further extraction format
-depends on a transport that does not exist per tenant yet.
+The audience layer now exists, so the binding constraint is no longer whether the
+platform can find an address or decide whether to trust it. It is what happens
+between the audience and a mail server.
 
 ```text
-5A  SMTP transport + per-user/admin assignment + deliverability preflight   NEXT
+5A  SMTP transport + per-user/admin assignment + deliverability preflight   DONE
       ↓
-5B  Sender identity, recipients, lists, consent, suppression, unsubscribe
+5B  Sender identity, recipients, lists, consent, suppression, unsubscribe   DONE
       ↓
-5C  Campaign engine, bounded queue, rate control, preflight, delivery state
+5C  Campaign engine, bounded queue, rate control, preflight, delivery state   NEXT
       ↓
 5D  Bounce and complaint feedback, provider adapters, sending analytics
       ↓
@@ -444,9 +457,10 @@ installation level, but nothing implements or advertises it: one request is one
 URL, one extraction, one bounded job. Whether many URLs become many jobs or one
 job is a Stage 3F decision, deliberately not pre-empted here.
 
-**Still deferred:** multi-URL extraction, file upload, XLSX, DOCX, PDF, XML, MX
-and DNS validation of extracted addresses, SMTP campaign delivery, recipients,
-suppression, billing and the REST API.
+**Still deferred:** multi-URL extraction, file upload, XLSX, DOCX, PDF, XML, SMTP
+campaign delivery, bounce and complaint feedback, billing and the REST API.
+Recipient validation, recipients, lists, consent, suppression and unsubscribe
+were **not** deferred — they shipped in Stage 5B.
 
 ## Deferred: Stage 3F — multi-URL workload architecture
 
@@ -495,9 +509,10 @@ globally routable and one private answer refuses the whole host.
 
 `DeliveryReadiness` reports PASS/WARN/BLOCK/UNKNOWN per check, with UNKNOWN as a
 real answer — DKIM without a known selector and DMARC alignment both stay
-Unknown, and consent, suppression, unsubscribe and rate policy are reported as not
-built. No numerical score exists because inbox placement is the receiving
-provider's decision, made from signals this platform cannot observe.
+Unknown. At the time of writing, consent, suppression, unsubscribe and rate policy
+were reported as not built; Stage 5B built the first three, and `README.md`
+records what they now report. No numerical score exists because inbox placement is
+the receiving provider's decision, made from signals this platform cannot observe.
 
 `SendingRatePolicy` and `DeliveryOutcome` are declared with no implementation, so
 Stage 5C inherits a shape where a throttle leads to backing off rather than to
@@ -505,8 +520,137 @@ transport switching, and `RateDecision::pause()` exists as a real result.
 
 ### What was deliberately not built
 
-No campaigns, no recipients, no suppression, no unsubscribe processing, no rate
-controller, no analytics, no multi-URL extraction — and no transport rotation, IP
-warm-up, reputation score or filter-evasion mechanism. The last group is not
-merely deferred: it is the model of the product this platform declines to
-implement.
+No campaigns, no rate controller, no analytics, no multi-URL extraction — and no
+transport rotation, IP warm-up, reputation score or filter-evasion mechanism. The
+last group is not merely deferred: it is the model of the product this platform
+declines to implement.
+
+---
+
+## What Stage 5B delivered
+
+### The accuracy rule, written as code
+
+One rule governs the whole stage: **maximise the precision of
+`CONFIRMED_INVALID`, and never classify uncertain evidence as inactive.** Calling
+a live recipient inactive costs one address; calling a dead one active costs a
+bounce, and enough of them cost the sending reputation.
+
+So `ValidationReason::definitive()` is an allowlist of exactly four entries —
+`invalid_syntax`, `domain_not_found`, `no_mail_route`, `mailbox_not_found` — and
+nothing outside it may produce an invalid verdict. Everything else lands in
+`UNKNOWN` with the reason it could not be classified: a timeout, a `4xx`, a
+`252`, a `251`, a policy `5.7.x`, an ambiguous `5.1.4`, a disabled mailbox, an
+unreachable resolver, a catch-all domain, and probing being switched off.
+
+The consequence that is easy to get wrong is the bare `550`. It is the single
+most consequential mapping in the product, because a server that answers `550` to
+everything is a server declining to leak its user list, and reading that as "no
+such mailbox" discards a live audience by the thousand. Only `5.1.1` means what a
+confirmed-invalid verdict claims to mean.
+
+### Four stages, and no probe message
+
+Syntax → mail route → catch-all → mailbox. Each layer runs only if the previous
+one did not produce a definitive answer, and every layer's failure mode is
+`UNKNOWN` rather than a pass. Nothing is ever sent to a recipient to find out
+whether they exist.
+
+`DnsMailRouteResolver` distinguishes *the domain publishes nothing* from *our
+resolver is down* with a control probe of an RFC 2606 `.invalid` name, because
+treating them the same would let a momentary outage classify an entire audience as
+invalid. `Unavailable` is never cached.
+
+### Caching, so the accuracy is affordable
+
+One DNS lookup per domain per window; one catch-all probe per domain per window,
+from an address built from 32 hex characters of CSPRNG output; one recipient check
+per mailbox until its evidence expires. The DNS cache is a table rather than a
+memory cache so a worker and the page rendering the report read the same evidence
+and the work survives a deploy. It is not tenant-scoped — a domain either
+publishes MX records or it does not — while the mailbox cache is, because two
+accounts may hold the same address with genuinely different evidence.
+
+Both affirmative and negative catch-all verdicts are cached; only `unknown` is
+not, because caching one would freeze a single unreachable moment into a verdict
+about every mailbox at the domain.
+
+### Canonical contacts, and lists that point rather than copy
+
+`unique(user_id, normalized_email)` makes one address one contact per tenant, and
+lists hold membership rows rather than contact copies. A validation result, a
+consent record and a suppression recorded once therefore apply to every list. The
+alternative is what makes "did I unsubscribe this person?" answerable only by
+checking every copy.
+
+### Consent as evidence
+
+`Unknown` / `Confirmed` / `Withdrawn`, derived from records rather than stored as
+a flag, because a boolean cannot distinguish "the recipient signed up" from
+"somebody pasted this list". A withdrawal outranks everything except a newer
+confirmation, compared on timestamps rather than insertion order. An operator's
+attestation is recorded and reported and never promotes a contact to `Confirmed`.
+
+### Suppression that re-importing cannot undo
+
+`unique(user_id, contact_id)` is the mechanism. Nothing that imports, extracts or
+lists a contact writes to that table, so the sequence *recipient unsubscribes →
+tenant re-imports tomorrow → tenant sends again* is impossible rather than merely
+unlikely. `unsubscribed` and `complaint` are terminal; `clear()` returns `false`
+for both and no control is offered that could undo them.
+
+### Unsubscribe
+
+64 characters of CSPRNG output, stored only as a SHA-256 digest. A signed URL
+would be tamper-proof but decodable, which is the wrong trade for the one link
+this platform puts into strangers' inboxes. `GET` confirms and `POST` acts, so a
+mail client's link preview cannot unsubscribe somebody on their behalf, and the
+suppression is written synchronously so the next campaign cannot be assembled from
+an audience that still contains this person.
+
+### A second job, and bounded passes
+
+`ProcessExtractionJob` fetches; `ValidateExtractionJob` checks. One job doing
+both would perform up to thirty thousand DNS and SMTP operations inside a worker
+whose entire runtime budget is 240 seconds, be killed mid-run, and show the
+customer a badge that never moves. Each pass links and then checks at most
+`max_per_pass` results and re-dispatches itself, so a list of any size is a series
+of passes rather than one that overruns. Counters are recomputed from the results
+table rather than incremented, which is what makes a killed-and-retried pass
+converge instead of compounding.
+
+Network I/O never happens inside a database transaction.
+
+### Sequencing by dispatch order
+
+One active task per account, different accounts independent, enforced by not
+dispatching a waiting task's job until its predecessor reaches a terminal state.
+A lock that each job takes, times out and re-checks would be a spin loop wearing a
+lock's clothes: it burns worker invocations and turns into exactly the "many
+workers all spinning on one lock" situation the existing `sender:work` bounds
+exist to prevent. The cost — a task whose worker is killed without `failed()`
+running blocks the account until the retry count exhausts — is bounded, recoverable
+and visible on the task's own badge.
+
+### Off by default
+
+`SENDER_VALIDATION_SMTP_PROBING` defaults to `false`, because shared hosting
+usually blocks outbound port 25. With probing off, syntax and DNS still run and
+everything else is `UNKNOWN` with the reason *verification blocked*. The task
+finishes, the counts are honest, and nothing is ever recorded as inactive on that
+basis. `sender:diagnose` prints the setting as `recipient validation probing`.
+
+### No send button, and no accuracy percentage
+
+`AudienceEligibility` is built and consumed by the report pages only. That is
+deliberate: a campaign stage that grew its own "eligible" clause would grow its
+own version of the rules, and the divergence would show up as a campaign that
+included a recipient somebody had unsubscribed from. `UNKNOWN` is excluded from
+sending by default — not sending loses one recipient we might have reached, while
+sending risks a bounce and a provider signal held against the whole account — and
+the breakdown counts overlap deliberately, because presenting them as a partition
+that sums to the list total would be a claim the data does not support.
+
+There is no percentage anywhere in the product, and the wording is *likely
+active* rather than *guaranteed*. A test asserts that no status label contains
+"guarantee", "99%" or "100%".

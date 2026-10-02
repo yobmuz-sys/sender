@@ -298,7 +298,52 @@ final class HostCapabilityInspector implements HostInspector
 
         $checks[] = $this->mailerCheck();
 
+        $checks[] = $this->recipientValidationCheck();
+
         return $checks;
+    }
+
+    /**
+     * Report whether recipient validation is switched on, and why it might be.
+     *
+     * Stage 5B's validation pipeline speaks SMTP to other people's mail servers
+     * on port 25, which shared hosting very often blocks. That is not visible
+     * anywhere else: the queue is Ready, the mailer is configured, the URL fetcher
+     * works, and every task still comes back `UNKNOWN` with the reason
+     * `verification_blocked`. An operator who cannot see the switch will read that
+     * as "the addresses are fine, the platform is not trying hard enough".
+     *
+     * Deliberately does not open a socket. The diagnose command runs on a timer
+     * in front of an operator, and the platform's whole argument for leaving
+     * probing off by default is that it should not be doing unsolicited SMTP to
+     * third parties. It reports the configuration and tells the operator how to
+     * find out what the host permits.
+     *
+     * Untagged, for the same reason as the transactional mailer check: a
+     * configuration switch is not a measurement, and the SMTP capability remains
+     * established only by `sender:verify-smtp`.
+     */
+    private function recipientValidationCheck(): CapabilityCheck
+    {
+        $enabled = (bool) config('sender.validation.smtp_probing', false);
+
+        if (! $enabled) {
+            return CapabilityCheck::degraded(
+                'recipient validation probing',
+                'off',
+                [
+                    'Addresses will be reported as UNKNOWN with the reason "verification blocked".',
+                    'That is the honest answer: the platform is not allowed to ask a mail server whether a mailbox exists.',
+                    'It never reports them as inactive, and it never reports them as active either.',
+                    'To turn it on, ask your host whether outbound port 25 is permitted, then set SENDER_VALIDATION_SMTP_PROBING=true.',
+                ],
+            );
+        }
+
+        return CapabilityCheck::ready(
+            'recipient validation probing',
+            sprintf('on (%.1fs per server)', (float) config('sender.validation.smtp_timeout_seconds', 5)),
+        );
     }
 
     /**

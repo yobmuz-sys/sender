@@ -40,6 +40,16 @@ final class AdminNavigation
             // above: those live in the environment, these in the database.
             new NavigationItem('SMTP accounts', 'admin.smtp.accounts.index', Permission::MAIL_ACCOUNTS_VIEW, matchPrefix: true),
             new NavigationItem('Sending health', 'admin.deliverability.index', Permission::DELIVERABILITY_VIEW),
+
+            // The audience layer. Each entry answers a different operational
+            // question, and none of them lists tasks — `/admin/jobs` and
+            // `/admin/runs` own that, so an operator has one authoritative place
+            // to look for queue state rather than three.
+            new NavigationItem('Audience', 'admin.audience.index', Permission::CONTACTS_VIEW),
+            new NavigationItem('Validation', 'admin.validation.index', Permission::VALIDATION_VIEW),
+            new NavigationItem('Lists', 'admin.lists.index', Permission::LISTS_VIEW),
+            new NavigationItem('Suppression', 'admin.suppression.index', Permission::SUPPRESSION_VIEW),
+
             new NavigationItem('System', 'admin.system.index', Permission::SYSTEM_VIEW, matchPrefix: true, children: [
                 new NavigationItem('Overview', 'admin.system.index', Permission::SYSTEM_VIEW),
                 new NavigationItem('Diagnostics', 'admin.system.diagnostics', Permission::SYSTEM_VIEW),

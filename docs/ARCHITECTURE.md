@@ -58,9 +58,13 @@ works before the bundle loads and cannot be broken by a script error.
 ```
 app/
 ├── Domain/            Business concepts, independent of the framework
+│   ├── Audience/      Contacts, validation, consent, suppression, unsubscribe
+│   ├── Extraction/    Source parsing, task lifecycle, progress, sequencing
+│   ├── Mail/          Message contract, sender identity, readiness, rate policy
 │   ├── System/        Host capability, deployment limits, subsystem flags
 │   └── Users/         Roles and permissions
 ├── Http/              Controllers and form requests
+├── Jobs/              Bounded, resumable queue work
 ├── Models/            Eloquent persistence models
 ├── Support/           Small framework-agnostic helpers
 ├── Console/Commands/  Operator CLI
@@ -951,8 +955,11 @@ decision it should not support.
   searching would be a guess.
 - **Alignment.** Only the outgoing message's headers can show whether SPF or DKIM
   aligned with the From domain, and this platform does not observe them.
-- **Consent, suppression, unsubscribe, rate policy.** Not built yet, and reported
-  as such so a fully configured transport does not read as ready to send.
+- **Consent, suppression, unsubscribe, rate policy.** Consent, suppression and
+  unsubscribe were built in Stage 5B; the readiness report now reflects the
+  audience layer that exists rather than describing a missing one. Rate policy is
+  still not built, and is still reported as such so a fully configured transport
+  does not read as ready to send.
 
 A present SPF record is reported as a published record, not as proof that this
 provider signs with it — only the final message's result would show that.
@@ -995,8 +1002,247 @@ limit always wins.
 
 ### The message contract
 
-`CampaignMessage` is a value object with no table, because no stage-5A consumer
+`CampaignMessage` is a value object with no table, because no stage-5 consumer
 requires persistence. It fixes two decisions that are cheap now and expensive to
 change later: plain text is *derived* when only HTML is given (offered for
 review, not silently sent), and `parts()` decides the MIME structure once. It
 takes no free-text From address — the sender comes from `SenderIdentityPolicy`.
+
+---
+
+## 19. The audience layer
+
+### One rule, and it is an allowlist
+
+> Maximise the precision of `CONFIRMED_INVALID`. Never classify uncertain evidence
+> as inactive.
+
+Calling a live recipient inactive costs one address. Calling a dead one active
+costs a bounce, and enough of them cost the sending reputation. So the rule is
+enforced by construction rather than by discipline: `ValidationReason::definitive()`
+returns exactly four reasons — `invalid_syntax`, `domain_not_found`,
+`no_mail_route`, `mailbox_not_found` — and no other code path may produce an
+invalid verdict. `RecipientProbeResult::hasDefinitiveEnhancedCode()` allowlists
+`5.1.1`, `5.1.2` and `5.1.3` for the same reason. **Widening either list is the
+single change that would do the most damage to this platform's accuracy**, which
+is why both are allowlists and not ranges.
+
+Everything else is `UNKNOWN` with the reason it could not be classified: a
+timeout, a refused connection, a `4xx`, a `251`, a `252`, a policy `5.7.x`, an
+ambiguous `5.1.4`, a disabled mailbox (`5.2.1`), an unreachable resolver, a
+catch-all domain, and probing being switched off.
+
+### Why a bare `550` is the most consequential mapping
+
+RFC 5321 makes an unambiguous reply code optional for a recipient server. A server
+that answered `550` for every address would leak its entire user list to anyone
+willing to ask, and the large providers responded by refusing to distinguish at
+all. Reading a bare `550` as "no such mailbox" therefore discards real recipients
+by the thousand, and a customer who lost four thousand good addresses has no way
+to tell that apart from a validator that worked correctly.
+
+So the mapping is built around the enhanced status code, not the reply code:
+
+```text
+550 with no enhanced code   ->  UNKNOWN (provider protection)
+550 with 5.1.1              ->  CONFIRMED_INVALID
+550 with 5.7.1              ->  UNKNOWN (policy)
+550 with 5.2.1              ->  UNKNOWN (mailbox exists, refuses mail)
+```
+
+`5.2.1` is worth naming: it *confirms the mailbox exists*, which is emphatically
+not invalid — and it is not usable either, which is why it is excluded from
+sending rather than counted as likely active.
+
+### Four stages, and no probe message
+
+```text
+syntax      deterministic; a failure is CONFIRMED_INVALID
+mail route  a DNS lookup cached per domain; a definitive absence is
+            CONFIRMED_INVALID, an unreachable resolver is not
+catch-all   one probe per domain per cache window; a positive result
+            makes every mailbox at the domain UNKNOWN
+mailbox     an SMTP recipient check, and the only stage that can produce
+            LIKELY_ACTIVE or MAILBOX_NOT_FOUND
+```
+
+Each layer runs only if the previous one did not produce a definitive answer, and
+every layer's failure mode is `UNKNOWN` rather than a pass. **There is no probe
+message.** Nothing is ever sent to a recipient to find out whether they exist.
+
+`DnsMailRouteResolver` distinguishes *this domain publishes nothing* from *our
+resolver is down* using a control probe of an RFC 2606 `.invalid` name, which can
+never resolve. Without it, one resolver outage would classify an entire audience
+as invalid — the most destructive mistake available to this pipeline, and one
+discovered only after a customer has acted on the report.
+
+An internationalised address is `UNKNOWN`, not invalid. The platform cannot
+canonicalise it, which is a limitation of this checker rather than a fact about
+the mailbox, and the pipeline therefore stops at the syntax stage rather than
+asking DNS and a mail server about an address it could not express.
+
+### Caching, because accuracy has to be affordable
+
+A list of ten thousand addresses at one domain is ten thousand SMTP conversations
+unless something stops it, and a shared host that asks a mail server ten thousand
+questions in an afternoon is what gets sending blocked. So the amount of work is
+bounded by the size of the two caches rather than by the size of the list.
+
+| Cache | Scope | TTL | Never cached |
+| --- | --- | --- | --- |
+| Mail route | global | 6 h | `Unavailable` |
+| Catch-all | global | 3 d | `Unknown` |
+| Mailbox | per tenant | 7 d positive, 30 d invalid | — |
+
+The route cache is a **table** rather than a memory cache, for two reasons: a
+worker and the page that renders the report must read the same evidence, and a
+cache rebuilt from nothing on every deploy re-probes every domain it touches
+after each release.
+
+It is **not** tenant-scoped, because a domain either publishes MX records or it
+does not — two accounts looking it up are looking up the same fact about the
+world. The mailbox cache **is** tenant-scoped, because two accounts may hold the
+same address with genuinely different evidence, and letting the second inherit the
+first's check would let a tenant claim a recipient was validated when it never
+was.
+
+Both affirmative and negative catch-all verdicts are cached and only `unknown` is
+not. Caching the affirmative is what bounds the probe to one per window; caching
+the negative matters just as much, because the same ten thousand addresses would
+otherwise each probe again.
+
+The catch-all probe uses an address built from 32 hex characters of CSPRNG output.
+A guessable probe (`test@example.com`) proves nothing, because a mail server is
+entitled to treat well-known local parts specially.
+
+### One contact per person per tenant
+
+`contacts` is keyed `unique(user_id, normalized_email)`. Lists hold membership
+rows in `list_contacts`, never contact copies, so a validation result, a consent
+record and a suppression recorded once apply to every list the contact is on.
+
+The alternative — a contact per list — is the design that makes "did I unsubscribe
+this person?" answerable only by checking every copy. Duplicates are prevented by
+a constraint rather than an `exists()` check, because that window is where two
+concurrent pastes both see nothing.
+
+### Consent is evidence, not a flag
+
+`ConsentLedger` derives `Unknown` / `Confirmed` / `Withdrawn` from records. A
+boolean cannot distinguish "the recipient signed up" from "somebody pasted this
+list" from "somebody typed it in by hand", and those call for entirely different
+decisions.
+
+The derivation is conservative and the order matters: a withdrawal anywhere in
+the history wins over everything except a *newer* confirmation, compared on
+timestamps rather than on insertion order. `imported_with_user_attestation` is
+recorded, reported and searchable, and does not make anybody sendable — "you told
+us they agreed" is not the same as holding a record that they did.
+
+### Suppression is a constraint, not an ordering
+
+```text
+recipient unsubscribes
+    -> tenant imports the same list again tomorrow
+        -> tenant sends to them again    <-- must be impossible
+```
+
+It is impossible because of `unique(user_id, contact_id)` and because nothing that
+imports, extracts or lists a contact writes to that table at all. The recorded
+reason is never downgraded: a complaint stays a complaint months later, because
+that is what a support agent asking *why* needs to be right about. `unsubscribed`
+and `complaint` are terminal — `clear()` returns `false` and no control is offered
+that could undo them.
+
+### The unsubscribe link
+
+Four properties, each a requirement:
+
+- **Opaque.** 64 characters of CSPRNG output, stored only as a SHA-256 digest.
+  A signed URL would be tamper-proof but *decodable*, which is the wrong trade for
+  the one link this platform puts into strangers' inboxes. There is no code path
+  that accepts a contact identifier, so nobody can be unsubscribed by guessing an
+  id.
+- **Immediate.** Written synchronously, with no queue in the path. An unsubscribe
+  a worker has not got to yet is one that will occasionally be overtaken by the
+  next campaign.
+- **Idempotent.** Two clicks, a forwarded link, a link from a campaign sent last
+  year: all end in the same sentence and the same row.
+- **Unauthenticated.** The recipient has no account and never will. `GET`
+  confirms and `POST` acts, so a mail client's link preview cannot unsubscribe
+  somebody on their behalf.
+
+### Two jobs, because one would overrun the worker
+
+`ProcessExtractionJob` finds addresses. `ValidateExtractionJob` checks them. One
+job doing both would perform up to thirty thousand DNS and SMTP operations inside
+a worker whose entire runtime budget is 240 seconds — it would overrun, be killed
+and retried, and the customer would watch a badge that never moves.
+
+Each validation pass links at most `max_per_pass` results to canonical contacts
+and then checks at most that many, committing in batches. Past its budget it
+dispatches *itself* and returns, so a list of any size is a series of passes
+rather than one that overruns. A job that looped until the list was finished would
+hold the worker open for the whole run.
+
+**Network I/O never happens inside a database transaction.** Each result is
+written immediately after its check returns, in its own write, so nothing holds a
+row lock while the worker waits on a third party's timeout. Counters are then
+*recomputed* from the results table in a grouped query, which is what makes an
+interrupted pass leave figures that are true of the work completed — and what
+makes a killed-and-retried pass converge instead of compounding. Nothing depends
+on the job running exactly once.
+
+### Sequencing by dispatch order, not by a lock
+
+One active task per account; different accounts independent. The guarantee is made
+by **not dispatching** a waiting task's job while an earlier one holds the queue;
+when the earlier task reaches a terminal state it dispatches its successor, and
+only then.
+
+The alternative — dispatching everything and having each job check on pickup
+whether it is the current task, releasing itself if not — is a spin loop wearing a
+lock's clothes. It burns worker invocations, it depends on `retry_after` to make
+progress, and on a host where cron runs every minute it becomes exactly the "many
+workers all spinning on one lock" situation the `sender:work` bounds exist to
+prevent.
+
+The cost is that a task whose worker is killed without `failed()` running blocks
+the account until the queue re-reserves the job and the retry counter exhausts.
+That is bounded, recoverable and visible on the task's own badge, which is the
+right trade against an unbounded spin loop.
+
+### Off by default, and honest about it
+
+`SENDER_VALIDATION_SMTP_PROBING` defaults to `false`, because shared hosting
+usually blocks outbound port 25 and a validator that cannot reach a mail server has
+nothing to report. With probing off, syntax and DNS still run — they cost nothing
+and are frequently conclusive — and everything else is `UNKNOWN` with the reason
+*verification blocked*.
+
+`UNKNOWN` is **excluded from sending by default**. Not sending risks losing one
+recipient we might have reached; sending risks a bounce, a complaint, and a
+provider signal held against the whole account. For a platform operated by someone
+with no technical knowledge, the first failure is the more expensive one and the
+second is invisible until it has done damage.
+
+`AudienceEligibility` is built now and consumed by the report pages only. That is
+deliberate: a campaign stage that grew its own "eligible" clause would grow its own
+version of the rules, and the divergence would show up as a campaign that included
+a recipient somebody had unsubscribed from. Writing the query while the only thing
+that can go wrong is a typo means the rules are exercised today and are correct
+before anything is put on the wire.
+
+Its breakdown counts **overlap deliberately** — a suppressed address may also be
+unvalidated, and both facts are true and worth seeing. Only `eligible` is
+exclusive. Presenting the others as a partition that sums to the list total would
+be a claim about the data the data does not support.
+
+### No send button, and no accuracy percentage
+
+Nothing in the product sends mail, and nothing claims a number. The status a
+customer sees is *likely active*, never *active* or *verified*: a `250` means the
+receiving server will accept mail for that address, which is not the same as the
+message arriving. There is no accuracy percentage anywhere, because no such
+figure is defensible — and a test asserts that no status label contains
+"guarantee", "99%" or "100%", so the wording cannot drift back.

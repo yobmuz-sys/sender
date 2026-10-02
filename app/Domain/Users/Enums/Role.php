@@ -72,6 +72,10 @@ enum Role: string
                 Permission::SYSTEM_VIEW,
                 Permission::MAIL_ACCOUNTS_VIEW,
                 Permission::DELIVERABILITY_VIEW,
+                Permission::CONTACTS_VIEW,
+                Permission::LISTS_VIEW,
+                Permission::SUPPRESSION_VIEW,
+                Permission::VALIDATION_VIEW,
             ],
 
             self::Operations => [
@@ -81,6 +85,14 @@ enum Role: string
                 Permission::JOBS_VIEW,
                 Permission::JOBS_MANAGE,
                 Permission::SYSTEM_VIEW,
+                // Reads the audience, and may suppress on a tenant's behalf.
+                // Suppression is the operation operations exists to perform: an
+                // address that bounced or complained has to stop being contacted,
+                // and doing that required a permission nobody held.
+                Permission::CONTACTS_VIEW,
+                Permission::SUPPRESSION_VIEW,
+                Permission::SUPPRESSION_MANAGE,
+                Permission::VALIDATION_VIEW,
             ],
 
             self::Billing => [

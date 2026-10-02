@@ -15,6 +15,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
+use Tests\Feature\Fakes\SucceedingExtractionJob;
 use Tests\TestCase;
 
 /**
@@ -77,7 +78,9 @@ class QueueWorkerTest extends TestCase
 
         $extraction = Extraction::query()->firstOrFail();
 
-        $this->assertSame('completed', $extraction->status->value);
+        // Both stages ran: extraction found the addresses and validation checked
+        // them, so the task ends at Ready with its counters filled in.
+        $this->assertSame('ready', $extraction->status->value);
         $this->assertSame(2, $extraction->found_count);
         $this->assertNotNull($extraction->started_at);
         $this->assertNotNull($extraction->completed_at);
@@ -99,7 +102,8 @@ class QueueWorkerTest extends TestCase
         $this->assertNotNull($run, 'sender:work must leave a scheduled_runs record');
         $this->assertTrue($run->succeeded());
         $this->assertNotNull($run->finished_at);
-        $this->assertSame(1, $run->processed_count);
+        // Two jobs complete: the extraction stage and the validation stage it queues.
+        $this->assertSame(2, $run->processed_count);
         $this->assertNotNull($run->duration_ms);
     }
 
@@ -132,13 +136,15 @@ class QueueWorkerTest extends TestCase
     {
         $extraction = Extraction::factory()->create([
             'user_id' => User::factory()->create()->id,
-            'status' => 'pending',
+            'status' => 'queued',
             'content' => 'someone@example.com',
         ]);
 
-        // Three jobs waiting, but the run may only take one.
+        // Three jobs waiting, but the run may only take one. A neutral job is used
+        // because the real extraction job queues a second one, which would
+        // refill the queue and hide the ceiling.
         for ($i = 0; $i < 3; $i++) {
-            ProcessExtractionJob::dispatch($extraction->id);
+            SucceedingExtractionJob::dispatch($extraction->id);
         }
 
         $this->assertSame(3, DB::table('jobs')->count());
@@ -149,7 +155,7 @@ class QueueWorkerTest extends TestCase
 
         $remaining = DB::table('jobs')->count();
 
-        $this->assertLessThan(3, $remaining, 'the worker must stop at its ceiling rather than draining');
+        $this->assertSame(2, $remaining, 'the worker must stop at its ceiling rather than draining');
         $this->assertGreaterThan(0, $remaining);
     }
 
@@ -230,13 +236,13 @@ class QueueWorkerTest extends TestCase
     {
         $extraction = Extraction::factory()->create([
             'user_id' => User::factory()->create()->id,
-            'status' => 'pending',
+            'status' => 'queued',
             'content' => 'someone@example.com',
         ]);
 
         // Three jobs queued up front...
         for ($i = 0; $i < 3; $i++) {
-            ProcessExtractionJob::dispatch($extraction->id);
+            SucceedingExtractionJob::dispatch($extraction->id);
         }
 
         $this->assertSame(3, DB::table('jobs')->count());
@@ -261,18 +267,18 @@ class QueueWorkerTest extends TestCase
 
         $extraction = Extraction::factory()->create([
             'user_id' => User::factory()->create()->id,
-            'status' => 'pending',
+            'status' => 'queued',
             'content' => 'someone@example.com',
         ]);
 
         for ($i = 0; $i < 3; $i++) {
-            ProcessExtractionJob::dispatch($extraction->id);
+            SucceedingExtractionJob::dispatch($extraction->id);
         }
 
         // Dispatched while the queue is non-empty, which is exactly the
         // condition that makes before/after arithmetic undercount.
-        ProcessExtractionJob::dispatch($extraction->id);
-        ProcessExtractionJob::dispatch($extraction->id);
+        SucceedingExtractionJob::dispatch($extraction->id);
+        SucceedingExtractionJob::dispatch($extraction->id);
 
         $this->artisan('sender:work')->assertSuccessful();
 
@@ -289,7 +295,7 @@ class QueueWorkerTest extends TestCase
     {
         $extraction = Extraction::factory()->create([
             'user_id' => User::factory()->create()->id,
-            'status' => 'pending',
+            'status' => 'queued',
             'content' => 'someone@example.com',
         ]);
 

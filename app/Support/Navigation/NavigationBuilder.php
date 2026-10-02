@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Support\Navigation;
 
+use Illuminate\Support\Facades\Route;
 use Illuminate\View\View;
 
 /**
@@ -26,7 +27,10 @@ final class NavigationBuilder
      */
     public function compose(View $view): void
     {
-        $view->with('navigation', $this->build());
+        $view->with([
+            'navigation' => $this->build(),
+            'pendingRoutes' => $this->pendingRoutes(),
+        ]);
     }
 
     /**
@@ -53,6 +57,42 @@ final class NavigationBuilder
             'admin' => $isStaff ? $admin : [],
             'account' => ProductNavigation::accountItems(),
         ];
+    }
+
+    /**
+     * Route names whose page exists only to say a feature is still being built.
+     *
+     * Read from where the route actually points rather than declared beside the
+     * navigation entry, so a section cannot still be labelled as unfinished once
+     * the page behind it is real, and cannot silently start claiming to work when
+     * it is not. This is presentation only and decides no access whatsoever: the
+     * Gate layer already refuses anything a visitor may not open, which is why
+     * showing a link is not the same as being able to follow it.
+     *
+     * @return list<string>
+     */
+    public function pendingRoutes(): array
+    {
+        $pending = [];
+
+        $collect = static function (array $items) use (&$collect, &$pending): void {
+            foreach ($items as $item) {
+                $route = Route::getRoutes()->getByName($item->route);
+
+                if ($route !== null && str_ends_with((string) $route->getActionName(), 'PendingFeatureController')) {
+                    $pending[] = $item->route;
+                }
+
+                if ($item->children !== []) {
+                    $collect($item->children);
+                }
+            }
+        };
+
+        $collect(ProductNavigation::items());
+        $collect(AdminNavigation::items());
+
+        return array_values(array_unique($pending));
     }
 
     /**

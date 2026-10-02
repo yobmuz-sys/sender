@@ -22,11 +22,31 @@
                 <div class="flex items-center gap-2">
                     <x-status-badge :status="$account->effectiveStatus()->isUsable() ? 'READY' : 'UNKNOWN'"
                                     :label="$account->effectiveStatus()->label()" />
-                    <span class="rounded-full px-2 py-0.5 text-xs font-medium {{ $report->isReady() ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900' }}">
-                        {{ $report->verdict() }}
+                    <span class="rounded-full px-2 py-0.5 text-xs font-medium {{ $report->isTransportHealthy() ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900' }}"
+                          title="{{ \App\Domain\Mail\TrafficMode::Transactional->question() }}">
+                        SMTP: {{ $report->transportStatus() }}
+                    </span>
+                    <span class="rounded-full px-2 py-0.5 text-xs font-medium {{ $report->isReady(\App\Domain\Mail\TrafficMode::BulkMarketing) ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-900' }}"
+                          title="{{ \App\Domain\Mail\TrafficMode::BulkMarketing->question() }}">
+                        Bulk marketing: {{ $report->verdict(\App\Domain\Mail\TrafficMode::BulkMarketing) }}
                     </span>
                 </div>
             </div>
+
+            {{-- Two verdicts rather than one. A transport with no DMARC record is
+                 working and not campaign-ready at the same time, and reporting
+                 only the first would invite a customer to start sending. --}}
+            @if ($report->isTransportHealthy() && ! $report->isReady(\App\Domain\Mail\TrafficMode::BulkMarketing))
+                <div class="mt-4 rounded-md bg-amber-50 p-4">
+                    <p class="text-sm font-medium text-amber-900">
+                        This transport works, but bulk marketing is not ready yet
+                    </p>
+                    <p class="mt-1 text-sm text-amber-900">
+                        Ordinary transactional messages are not affected. Sending a campaign is, and the gap is in
+                        your sending policy rather than in your SMTP account.
+                    </p>
+                </div>
+            @endif
 
             @if ($report->blockers() !== [])
                 <div class="mt-4 rounded-md bg-rose-50 p-4">

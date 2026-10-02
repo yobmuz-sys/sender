@@ -21,9 +21,19 @@ namespace App\Domain\Mail;
  *   - an unverified account, so nothing has ever been proved about the server
  *   - a From address the transport did not authenticate as, which would make
  *     this host an open relay for someone else's identity
- *   - no DMARC record on a sending domain, which bulk senders are required to
- *     publish and which a domain cannot adopt retroactively for a mail already
- *     in flight
+ *
+ * One finding is *scoped* rather than universal: a sending domain with no DMARC
+ * record. Providers require DMARC of bulk senders rather than of every sender, so
+ * the same absent record is disqualifying for a marketing campaign and only a
+ * warning for transactional mail. Reporting it as a block in general would turn
+ * a working transport into "SMTP: BROKEN", which is not what is true; reporting
+ * it as a warning in general would hide a gap the customer hits the moment they
+ * try to send a campaign. It is reported at both strengths and the question
+ * being asked is named by {@see TrafficMode}.
+ *
+ * The distinction is the whole point: SMTP technical status and bulk-sending
+ * readiness are different questions with different answers, and both can be true
+ * at once.
  *
  * DKIM is reported `Unknown` unless a selector is configured and its record can
  * be read. The final message's signature is the provider's, not this
@@ -287,14 +297,18 @@ final class DeliveryReadiness
                     'The domain publishes a DMARC record with policy %s.',
                     $this->dns->dmarcPolicy($domain) ?? 'unset',
                 ),
+                FindingScope::BulkOnly,
             )
             : ReadinessFinding::block(
                 'DMARC',
                 sprintf(
                     'The domain %s publishes no DMARC record. Bulk senders are required to publish one, and a domain '
-                        .'cannot adopt a policy for mail already in flight, so this must be fixed before sending.',
+                        .'cannot adopt a policy for mail already in flight, so this must be fixed before sending a '
+                        .'marketing campaign. It does not stop ordinary transactional messages, which is why the '
+                        .'transport can be reported as technically ready while bulk sending is blocked.',
                     $domain,
                 ),
+                FindingScope::BulkOnly,
             );
 
         // Alignment is reported as published, never as achieved. Only the final

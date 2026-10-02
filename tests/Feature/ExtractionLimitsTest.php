@@ -104,7 +104,7 @@ class ExtractionLimitsTest extends TestCase
     public function test_processing_stays_within_a_bounded_number_of_rows_per_write(): void
     {
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Pending->value,
+            'status' => ExtractionStatus::Queued->value,
             // More distinct addresses than a single batch may carry.
             'content' => implode("\n", array_map(
                 static fn (int $i): string => "user{$i}@example.com",
@@ -128,7 +128,7 @@ class ExtractionLimitsTest extends TestCase
         $content = $prefix."\nalpha@example.com\n".str_repeat('y', 400)."\nbeta@example.com\n";
 
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Pending->value,
+            'status' => ExtractionStatus::Queued->value,
             'content' => $content,
         ]);
 
@@ -151,7 +151,7 @@ class ExtractionLimitsTest extends TestCase
         // proportional to the input. Two distinct addresses, one megabyte of
         // noise: the found count stays at two.
         $extraction = Extraction::factory()->create([
-            'status' => ExtractionStatus::Pending->value,
+            'status' => ExtractionStatus::Queued->value,
             'content' => str_repeat('noise ', 150_000).'alpha@example.com beta@example.com',
         ]);
 
