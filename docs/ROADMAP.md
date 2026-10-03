@@ -8,11 +8,18 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 ## Position
 
 > **Stage 5C — campaign engine, in progress**
-> Stage 5C opened with **templates**: reusable message content, tenant-scoped, with
-> a whitelisted placeholder renderer that never compiles a customer's HTML, a
-> sandboxed preview, and a version counter that means a campaign can copy content at
-> launch and keep it. The campaign domain — audience snapshot, preflight, durable
-> recipient state, rate scheduling and the resumable worker — is next.
+> Stage 5C has delivered **templates** and the **campaign domain**: a campaign
+> copies its message and its audience at launch and reads neither again, so a
+> template edited afterwards cannot change what is already going out. Preflight
+> answers PASS/WARN/BLOCK/UNKNOWN from one service the builder, the campaign page
+> and the start action all call — and the start action calls it again on the
+> server. Recipients, retries and pacing live in database rows rather than in a
+> process, so a worker killed mid-campaign resumes from the state and two workers
+> cannot send the same message. Pacing is a minimum interval enforced from a
+> timestamp, and the pages say plainly that the hosting scheduler decides when the
+> worker runs. A transport that stops working stops its campaign; it is never
+> quietly switched to another account. Bounce and complaint ingestion and
+> analytics are next, on the delivery records this stage leaves behind.
 >
 > **Stage 5B — recipient validation and audience controls**
 > Addresses an extraction finds are checked, not merely collected. A four-stage
@@ -108,7 +115,7 @@ diagnostics page (Stage 3B adds the full administrative surface).
 | 2 | Capability, availability and deployment control foundation | complete |
 | 3 | Job and cron processing engine | 3A and 3B complete; engine not started |
 | 4 | Email extraction engine | pending |
-| 5 | SMTP campaign engine | pending |
+| 5 | SMTP campaign engine | 5A and 5B complete; 5C begun (templates, campaign domain, preflight, durable audience, worker) |
 | 6 | Admin operations centre | 3B foundation in place; operational workloads pending |
 | 7 | REST API and PHP integration | pending |
 | 8 | Billing | pending |
@@ -668,15 +675,110 @@ behaviour the flag exists to prevent. It is decided by the flag and the ceiling.
 
 ### No send button, and no accuracy percentage
 
-`AudienceEligibility` is built and consumed by the report pages only. That is
-deliberate: a campaign stage that grew its own "eligible" clause would grow its
-own version of the rules, and the divergence would show up as a campaign that
-included a recipient somebody had unsubscribed from. `UNKNOWN` is excluded from
-sending by default — not sending loses one recipient we might have reached, while
-sending risks a bounce and a provider signal held against the whole account — and
-the breakdown counts overlap deliberately, because presenting them as a partition
-that sums to the list total would be a claim the data does not support.
+`AudienceEligibility` was built and consumed by the report pages only, which was
+deliberate: a campaign stage that grew its own "eligible" clause would grow its own
+version of the rules, and the divergence would show up as a campaign that
+included a recipient somebody had unsubscribed from. Stage 5C **reuses that query
+rather than replacing it**, and the send button that appeared then was added
+against it, so there is still exactly one definition of who may be contacted.
+`UNKNOWN` is excluded from sending by default — not sending loses one recipient we
+might have reached, while sending risks a bounce and a provider signal held
+against the whole account — and the breakdown counts overlap deliberately, because
+presenting them as a partition that sums to the list total would be a claim the
+data does not support.
 
 There is no percentage anywhere in the product, and the wording is *likely
 active* rather than *guaranteed*. A test asserts that no status label contains
 "guarantee", "99%" or "100%".
+
+---
+
+## What Stage 5C delivered
+
+Two features so far: **templates**, then the **campaign domain**. Both exist so
+that what leaves this platform is defensible, and neither claims anything about
+where a message ends up.
+
+### Templates
+
+Reusable message content, tenant-scoped, with a whitelisted placeholder renderer
+(`{{email}}`, `{{first_name}}`, `{{unsubscribe_url}}`) that never compiles a
+customer's HTML, a preview rendered in a sandboxed frame, and a version counter
+that increments only when content actually changes. `Template::snapshot()` is the
+contract the campaign stage consumes.
+
+### A campaign is a frozen sending job
+
+The invariant the whole stage is arranged around:
+
+> Template content, audience membership, suppression result and transport
+> selection used for a launched campaign must not silently change underneath it.
+
+At launch, in one transaction, a campaign copies the template's subject and both
+bodies into its own columns, records the version it copied, and snapshots the
+audience into `campaign_recipients`. After that it reads neither the template nor
+the list again. Editing a template to version 4 while a campaign built from
+version 3 is halfway through sending changes the template and nothing else — and
+that is tested, not asserted.
+
+Delivered:
+
+- **Durable recipient state** — `campaign_recipients` with `unique(campaign_id,
+  contact_id)`, a per-recipient `next_attempt_at`, and six statuses (`queued`,
+  `sending`, `sent`, `failed`, `skipped`, `blocked`). A worker killed mid-campaign
+  resumes from this table; nothing important lives in a PHP process.
+- **Audience snapshot** — the launch reuses `AudienceEligibility` rather than
+  restating it, records only eligible contacts, and does not mutate the list.
+  Excluded contacts stay on the customer's list, because deleting them would hide
+  the exclusion in the last place they would look for it. Each recipient also
+  stores the address it was created for, so deleting a contact cannot rewrite a
+  finished campaign's totals.
+- **Preflight** — one service answering PASS / WARN / BLOCK / UNKNOWN for name,
+  template ownership and readiness, placeholders, unsubscribe link, transport,
+  verification, sender identity, deliverability readiness, audience, suppression,
+  consent, interval and batch size. The builder, the campaign page and the start
+  action call the same service, and the start action calls it **again on the
+  server**: a result rendered in a browser is a claim, not a decision. It scores
+  nothing and offers no alternative transport.
+- **Durable rate scheduling** — the campaign's minimum interval lives in a
+  `next_send_at` timestamp, not a sleep. A worker sends what is due, advances the
+  clock by one interval, and hands the next opportunity back to the queue as a
+  delayed job. A run that is behind catches up at the configured average rate,
+  bounded by the batch size. The strictest of the campaign interval, the
+  installation floor and the per-run ceiling wins. The UI says *minimum send
+  interval* and states plainly that the hosting scheduler decides when the worker
+  actually runs.
+- **Scheduling is an instant, not a wall-clock** — the builder takes a start time
+  and a time zone with today's offset shown in the list, because "09:00" alone is
+  not a moment. What the customer typed is stored as the zone they typed it in and
+  shown back to them the same way; the database holds UTC and nothing else. A
+  scheduled campaign waits for the worker, and *send now instead* discards the
+  wait — after re-running the checks, because a customer who no longer wants the
+  wait still has to be refused if the transport stopped working in the meantime.
+- **Resumable campaign worker** — `ProcessCampaignJob` carries an identifier
+  only, runs one bounded pass, and is bounded by the same `WorkerBounds` as every
+  other job. Campaign and recipient claims are conditional updates decided by the
+  database, so two workers cannot send the same message; a claim left by a killed
+  worker goes stale and is taken back.
+- **Delivery attempt history** — `delivery_attempts` is append-only, one row per
+  attempt with the server's own code and reply, retained so a bounce arriving next
+  month can be matched to the submission that produced it.
+- **Retry and failure policy** — temporary failures retry with bounded exponential
+  backoff and a hard attempt ceiling; a refused recipient fails immediately and
+  keeps its code and response; a transport failure **stops the campaign and says
+  so** rather than retrying or switching to another account. Suppression is
+  re-checked immediately before every submission, so an unsubscribe clicked after
+  the snapshot cannot be overtaken by the next campaign.
+- **Unsubscribe** — the existing `UnsubscribeLink` gained a `url()` method rather
+  than a second mechanism. A message without `{{unsubscribe_url}}` cannot launch,
+  `List-Unsubscribe` is sent as a header on every message, and each recipient
+  receives their own link.
+
+### Still not built
+
+Bounce and complaint ingestion, provider webhook adapters, sending analytics,
+open and click tracking, transport warm-up, IP or SMTP rotation, and the
+administrative campaigns page. Those are Stage 5D and 5D-plus; the durable
+delivery records they need now exist, so they will be built on the data rather
+than retrofitted onto it. `Sent` means the transport accepted the message and
+nothing more.

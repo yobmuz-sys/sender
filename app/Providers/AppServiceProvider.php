@@ -16,6 +16,9 @@ use App\Domain\Audience\SmtpProbingPolicy;
 use App\Domain\Audience\SmtpRecipientProber;
 use App\Domain\Audience\SyntaxValidator;
 use App\Domain\Audience\ValidationPipeline;
+use App\Domain\Campaigns\CampaignPreflight;
+use App\Domain\Campaigns\MessageTransport;
+use App\Domain\Campaigns\SmtpMessageTransport;
 use App\Domain\Extraction\Extractor;
 use App\Domain\Extraction\PendingTaskQueue;
 use App\Domain\Extraction\Url\SecureUrlFetcher;
@@ -88,6 +91,18 @@ class AppServiceProvider extends ServiceProvider
         // One instance so DNS evidence is resolved once per page and every
         // finding on that page agrees about it.
         $this->app->scoped(DeliveryReadiness::class);
+
+        // How a campaign message actually reaches a server. Bound to the interface
+        // rather than autowired so a test can substitute a recording double: the
+        // campaign engine has to be testable without a mail server, and a test that
+        // asserts on a fake rather than on a socket is the only kind anybody runs.
+        $this->app->bind(MessageTransport::class, SmtpMessageTransport::class);
+
+        // The preflight is shared, not resolved per caller, so the builder page, the
+        // campaign page and the start action are reading one answer. It is scoped
+        // because its readiness evidence is memoised for the request, and a
+        // singleton would carry one campaign's evidence into the next request.
+        $this->app->scoped(CampaignPreflight::class);
 
         $this->registerAudienceBindings();
     }

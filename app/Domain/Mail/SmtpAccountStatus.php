@@ -91,4 +91,24 @@ enum SmtpAccountStatus: string
     {
         return $this !== self::Ready;
     }
+
+    /**
+     * What this state means for a send, in one sentence.
+     *
+     * Lives here rather than in a view because three different screens now report
+     * it — the account pages, the campaign builder's transport panel and the
+     * campaign preflight — and wording written three times is wording that will
+     * disagree with itself. The remedy is named in every branch, because a status a
+     * customer cannot act on is only a complaint with better typography.
+     */
+    public function explanation(): string
+    {
+        return match ($this) {
+            self::Unverified => 'This account has never proved it can connect and submit, so nothing can be sent through it yet. Verify it first.',
+            self::Ready => 'This account was verified recently and can send now.',
+            self::Stale => 'The verification on this account has expired, so it is treated as unverified. Verify it again before sending.',
+            self::Failed => 'This account stopped working when it was last used. Verify it again to find out whether the credentials or the host are at fault.',
+            self::Disabled => 'An operator switched this account off, so it will not send until they switch it back on.',
+        };
+    }
 }

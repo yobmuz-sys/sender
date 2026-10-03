@@ -38,6 +38,7 @@ use App\Http\Controllers\Auth\NewPasswordController;
 use App\Http\Controllers\Auth\PasswordResetLinkController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\Auth\VerifyEmailController;
+use App\Http\Controllers\Campaigns\CampaignController;
 use App\Http\Controllers\DiagnosticsController;
 use App\Http\Controllers\ExtractorController;
 use App\Http\Controllers\PendingFeatureController;
@@ -228,14 +229,40 @@ Route::middleware(['auth', 'confirmed'])->group(function (): void {
         Route::post('{template}/duplicate', [TemplateController::class, 'duplicate'])->name('duplicate');
     });
 
-    Route::get('campaigns', PendingFeatureController::class)
-        ->defaults('section', 'campaigns')->name('campaigns.index');
-    Route::get('campaigns/new', PendingFeatureController::class)
-        ->defaults('section', 'campaigns')->defaults('record', 'new')->name('campaigns.create');
-    Route::get('campaigns/{campaign}', PendingFeatureController::class)
-        ->defaults('section', 'campaigns')->name('campaigns.show');
-    Route::get('campaigns/{campaign}/edit', PendingFeatureController::class)
-        ->defaults('section', 'campaigns')->defaults('record', 'edit')->name('campaigns.edit');
+    /*
+    |--------------------------------------------------------------------------
+    | Campaigns
+    |--------------------------------------------------------------------------
+    |
+    | Real pages as of Stage 5C, replacing the four staged shells.
+    |
+    | Every state change is a POST, including start. A GET that began sending
+    | would mean a prefetch, a shared tab or an email client could put messages on
+    | the wire, and none of those is a decision anybody made on this page.
+    |
+    | `{campaign}` is resolved by the controller rather than by route-model
+    | binding, so another tenant's campaign is a 404 instead of a binding failure
+    | that reads like a missing record.
+    |
+    | `send-now` is the one action that contradicts a plan the customer made: it
+    | discards a scheduled start time they may no longer want. It is a POST like
+    | every other state change, it re-runs the same checks, and it is only offered
+    | while the campaign is still waiting.
+    |
+    */
+    Route::prefix('campaigns')->name('campaigns.')->group(function (): void {
+        Route::get('/', [CampaignController::class, 'index'])->name('index');
+        Route::get('new', [CampaignController::class, 'create'])->name('create');
+        Route::post('/', [CampaignController::class, 'store'])->name('store');
+        Route::get('{campaign}', [CampaignController::class, 'show'])->name('show');
+        Route::get('{campaign}/edit', [CampaignController::class, 'edit'])->name('edit');
+        Route::put('{campaign}', [CampaignController::class, 'update'])->name('update');
+        Route::post('{campaign}/start', [CampaignController::class, 'start'])->name('start');
+        Route::post('{campaign}/send-now', [CampaignController::class, 'sendNow'])->name('sendNow');
+        Route::post('{campaign}/pause', [CampaignController::class, 'pause'])->name('pause');
+        Route::post('{campaign}/resume', [CampaignController::class, 'resume'])->name('resume');
+        Route::post('{campaign}/cancel', [CampaignController::class, 'cancel'])->name('cancel');
+    });
 
     // `/suppression` is a real page as of Stage 5B. There is deliberately no
     // staged shell left behind for it: a route that exists only to render a

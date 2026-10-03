@@ -305,6 +305,40 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Campaign sending
+    |---------------------------------------------------------------------------
+    |
+    | Ceilings for the sending engine. These are limits on *work per invocation*,
+    | not targets: nothing here decides how much mail a campaign sends, only how
+    | much one PHP process may attempt before it must exit and let cron come back.
+    |
+    | The pacing a customer configures lives on the campaign itself and is
+    | reconciled against `sending.minimum_interval_seconds` at send time, so
+    | neither file is authoritative on its own.
+    |
+    */
+    'campaigns' => [
+
+        // Attempts allowed for one recipient, including the first. Bounded so a
+        // dead address cannot occupy the worker indefinitely; the delay between
+        // them grows exponentially and is capped below.
+        'max_attempts' => (int) env('SENDER_CAMPAIGN_MAX_ATTEMPTS', 4),
+
+        // First backoff after a temporary failure, and its ceiling. Growth is
+        // `base * 2^(attempt - 1)` because a provider issuing a 4xx is usually
+        // saying the volume is too high, and retrying at the same pace is how a
+        // throttle becomes a block.
+        'retry_base_seconds' => (int) env('SENDER_CAMPAIGN_RETRY_BASE_SECONDS', 300),
+        'retry_max_seconds' => (int) env('SENDER_CAMPAIGN_RETRY_MAX_SECONDS', 3600),
+
+        // Longest a worker may hold a campaign or recipient claim before another
+        // worker assumes it was abandoned. Comfortably longer than one submission,
+        // which is bounded by the transport's own timeout.
+        'claim_stale_after_seconds' => (int) env('SENDER_CAMPAIGN_CLAIM_STALE_SECONDS', 900),
+    ],
+
+    /*
+    |---------------------------------------------------------------------------
     | Outbound URL fetching
     |---------------------------------------------------------------------------
     |

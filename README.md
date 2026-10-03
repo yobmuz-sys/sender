@@ -93,10 +93,12 @@ of them should be "fixed" by weakening a threshold or a check.
 6. **Run evidence is a record of outcomes, not a progress model.** Runs are
    deliberately minimal: no chunking, progress or dependency graph. Those belong
    to the workload that needs them.
-7. **Placeholder pages carry no behaviour.** Features, plans, campaigns, API,
-   billing and audit are rendered as explicit "not yet available" shells. They
-   query no domain table, because no such table exists yet and inventing one
-   would fabricate a dependency.
+7. **Placeholder pages carry no behaviour.** Features, plans, the administrative
+   campaigns page, API, billing and audit are rendered as explicit "not yet
+   available" shells. They query no domain table, because no such table exists yet
+   and inventing one would fabricate a dependency. The *customer* campaign pages
+   are real as of Stage 5C: a campaign freezes its message and its audience at
+   launch and sends them from a bounded worker.
 8. **One URL per extraction, and no query string.** `source_type` is `paste` or
    `url`; a URL extraction fetches exactly one address. `source_ref` is stored
    without its query string, because it is both what the worker fetches and
@@ -151,10 +153,12 @@ of them should be "fixed" by weakening a threshold or a check.
     suppression is the one case it will lift.
 
 **Not** implemented, and deliberately so at this stage: multi-URL extraction,
-file upload, XLSX/DOCX/PDF/XML parsing, campaign sending, bounce and complaint
-feedback ingestion, open and click tracking, rate-control implementation,
-warm-up, scoring, IP rotation, analytics, plans, entitlements, usage tracking,
-PHP integration and billing. See [docs/ROADMAP.md](docs/ROADMAP.md).
+file upload, XLSX/DOCX/PDF/XML parsing, bounce and complaint feedback ingestion,
+open and click tracking, transport warm-up, scoring, IP rotation, analytics, plans,
+entitlements, usage tracking, PHP integration and billing. Rate control *is*
+implemented — as a durable minimum interval enforced from the database — but the
+host scheduler still decides how often the worker actually runs. See
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 

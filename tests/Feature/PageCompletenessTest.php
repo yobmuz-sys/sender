@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Domain\Campaigns\Campaign;
 use App\Domain\Templates\Template;
 use App\Domain\Users\Enums\Role;
 use App\Domain\Users\Permission;
@@ -87,8 +88,8 @@ class PageCompletenessTest extends TestCase
             'templates record' => ['/templates/1'],
             'campaigns' => ['/campaigns'],
             'campaigns new' => ['/campaigns/new'],
-            'campaigns record' => ['/campaigns/abc'],
-            'campaigns edit' => ['/campaigns/abc/edit'],
+            'campaigns record' => ['/campaigns/1'],
+            'campaigns edit' => ['/campaigns/1/edit'],
             'suppression' => ['/suppression'],
             'analytics' => ['/analytics'],
         ];
@@ -177,14 +178,25 @@ class PageCompletenessTest extends TestCase
         $user = User::factory()->create();
 
         // A record page needs a record the account actually owns. A slug-shaped
-        // path would render a shell, but lists and templates are real rows now, and
-        // an empty detail page proves nothing about the real one.
+        // path would render a shell, but lists, templates and campaigns are real
+        // rows now, and an empty detail page proves nothing about the real one.
         if ($path === '/lists/1') {
             ContactList::factory()->for($user)->create();
         }
 
         if ($path === '/templates/1') {
             Template::factory()->for($user)->create();
+        }
+
+        // A campaign belongs to an account, so one is created for it — a page that
+        // 404s for an account with no campaigns is a real answer, and asserting it
+        // is 200 for a row it does not own would be asserting nothing.
+        if ($path === '/campaigns/1') {
+            Campaign::factory()->for($user)->create();
+        }
+
+        if ($path === '/campaigns/1/edit') {
+            Campaign::factory()->for($user)->create();
         }
 
         $this->actingAs($user)
@@ -322,13 +334,13 @@ class PageCompletenessTest extends TestCase
         // A placeholder that grew a query against a table which does not exist
         // yet would be an invented dependency, so the tables it must not touch
         // are named explicitly here.
+        //
+        // Campaigns is no longer one of them: the campaign domain now exists, and
+        // only the *administrative* campaigns page is still a placeholder. That
+        // distinction is the point of this test — the page being pending says
+        // nothing about the tables the product now has.
         $this->actingAs($staff)->get('/admin/campaigns')->assertOk();
         $this->actingAs($staff)->get('/admin/plans')->assertOk();
-
-        $this->assertFalse(
-            Schema::hasTable('campaigns'),
-            'the campaigns placeholder must not have been given a table',
-        );
 
         $this->assertFalse(
             Schema::hasTable('plans'),

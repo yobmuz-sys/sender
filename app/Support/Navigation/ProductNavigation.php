@@ -37,6 +37,9 @@ final class ProductNavigation
             // Real as of Stage 5C: reusable message content, versioned so that
             // editing it cannot change what a running campaign is sending.
             new NavigationItem('Templates', 'templates.index', matchPrefix: true),
+            // Real as of Stage 5C: a prepared sending job, frozen at launch so
+            // its message, audience and transport cannot change underneath it,
+            // sent by a bounded worker that resumes from the database.
             new NavigationItem('Campaigns', 'campaigns.index', matchPrefix: true),
             // Real: addresses this account will never contact, with the reason
             // for each. Every unsubscribe, bounce and complaint lands here and

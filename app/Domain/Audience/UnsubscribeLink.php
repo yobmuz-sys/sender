@@ -52,6 +52,25 @@ class UnsubscribeLink
     }
 
     /**
+     * The public URL one recipient's message should carry.
+     *
+     * Issues a token and builds the link in one step, because a campaign needs the
+     * URL and not the token: the token is a secret that must not be recoverable
+     * from stored content, and a message body that held one would hold it forever.
+     *
+     * One token per submission rather than one per contact. A recipient who needs
+     * to unsubscribe twice — after a campaign and after a later one — gets two
+     * links, and both work, which is the property {@see self::unsubscribe()} is
+     * built to guarantee. Sharing one token across every message would mean a
+     * recipient who forwarded a message to a friend handed that friend the ability
+     * to suppress an address they do not own.
+     */
+    public function url(Contact $contact): string
+    {
+        return route('unsubscribe.show', $this->issue($contact));
+    }
+
+    /**
      * The contact a token acts on, or null if it does not resolve.
      *
      * A lookup by digest only. There is no path here that accepts a contact
