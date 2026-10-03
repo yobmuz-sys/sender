@@ -73,7 +73,7 @@ final class CampaignIndex
 
         return $campaigns->through(fn (Campaign $campaign): CampaignSummary => CampaignSummary::of(
             $campaign,
-            $this->countsFrom($campaign),
+            CampaignCountColumns::from($campaign),
         ));
     }
 
@@ -122,15 +122,7 @@ final class CampaignIndex
         $query = Campaign::query()
             ->ownedBy((int) $user->id)
             ->with(['list', 'smtpAccount'])
-            ->withCount([
-                'recipients as recipients_total',
-                'recipients as recipients_sent' => fn (Builder $q) => $q->where('status', CampaignRecipientStatus::Sent->value),
-                'recipients as recipients_failed' => fn (Builder $q) => $q->where('status', CampaignRecipientStatus::Failed->value),
-                'recipients as recipients_skipped' => fn (Builder $q) => $q->where('status', CampaignRecipientStatus::Skipped->value),
-                'recipients as recipients_blocked' => fn (Builder $q) => $q->where('status', CampaignRecipientStatus::Blocked->value),
-                'recipients as recipients_queued' => fn (Builder $q) => $q->where('status', CampaignRecipientStatus::Queued->value),
-                'recipients as recipients_sending' => fn (Builder $q) => $q->where('status', CampaignRecipientStatus::Sending->value),
-            ]);
+            ->withCount(CampaignCountColumns::withCounts());
 
         $filters->applyTo($query);
 
@@ -156,21 +148,5 @@ final class CampaignIndex
             self::ATTENTION_ORDER,
             array_keys(self::ATTENTION_ORDER),
         )).' else 99';
-    }
-
-    /**
-     * The counts a paginator selected, as the array the read model expects.
-     *
-     * @return array<string, int>
-     */
-    private function countsFrom(Campaign $campaign): array
-    {
-        $counts = ['total' => (int) $campaign->recipients_total];
-
-        foreach (CampaignRecipientStatus::cases() as $status) {
-            $counts[$status->value] = (int) $campaign->{'recipients_'.$status->value};
-        }
-
-        return $counts;
     }
 }

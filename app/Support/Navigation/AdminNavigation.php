@@ -32,7 +32,9 @@ final class AdminNavigation
             new NavigationItem('Roles & permissions', 'admin.roles.index', Permission::USERS_VIEW),
             new NavigationItem('Features', 'admin.features.index', Permission::FEATURES_VIEW),
             new NavigationItem('Plans', 'admin.plans.index', Permission::PLANS_VIEW),
-            new NavigationItem('Campaigns', 'admin.campaigns.index', Permission::CAMPAIGNS_VIEW),
+            // `matchPrefix` because an operator reading one campaign is still reading the
+            // campaign list, and the sidebar should say so.
+            new NavigationItem('Campaigns', 'admin.campaigns.index', Permission::CAMPAIGNS_VIEW, matchPrefix: true),
             new NavigationItem('Jobs', 'admin.jobs.index', Permission::JOBS_VIEW),
             new NavigationItem('Runs', 'admin.runs.index', Permission::JOBS_VIEW),
             new NavigationItem('SMTP', 'admin.smtp.index', Permission::SYSTEM_VIEW),

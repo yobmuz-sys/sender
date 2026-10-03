@@ -10,7 +10,7 @@ use App\Http\Controllers\Admin\ApiController;
 use App\Http\Controllers\Admin\AudienceController as AdminAudienceController;
 use App\Http\Controllers\Admin\AuditController;
 use App\Http\Controllers\Admin\BillingController;
-use App\Http\Controllers\Admin\CampaignsController;
+use App\Http\Controllers\Admin\CampaignController as AdminCampaignController;
 use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
 use App\Http\Controllers\Admin\DeliverabilityController as AdminDeliverabilityController;
 use App\Http\Controllers\Admin\DiagnosticsController as AdminDiagnosticsController;
@@ -311,7 +311,26 @@ Route::middleware(['auth', 'confirmed', 'can:'.Permission::ADMIN_VIEW])
 
         Route::get('features', FeaturesController::class)->middleware('can:'.Permission::FEATURES_VIEW)->name('features.index');
         Route::get('plans', PlansController::class)->middleware('can:'.Permission::PLANS_VIEW)->name('plans.index');
-        Route::get('campaigns', CampaignsController::class)->middleware('can:'.Permission::CAMPAIGNS_VIEW)->name('campaigns.index');
+        /*
+         * Campaign operations, across tenants.
+         *
+         * `campaigns.view` to read and `campaigns.pause` to intervene, split
+         * deliberately: an operator who can watch campaigns happening is not
+         * thereby authorised to stop one. The transitions themselves are validated
+         * by the campaign domain as well, so the permission is a gate on who may ask
+         * and the state is the gate on whether it is allowed.
+         *
+         * Note what is absent: no route here launches, edits, reconfigures or
+         * re-transports a campaign. Those are decisions about a specific owner's
+         * mail, made with a preflight, and an administrator has no standing to make
+         * them on somebody's behalf.
+         */
+        Route::get('campaigns', [AdminCampaignController::class, 'index'])->middleware('can:'.Permission::CAMPAIGNS_VIEW)->name('campaigns.index');
+        Route::get('campaigns/{campaign}', [AdminCampaignController::class, 'show'])->middleware('can:'.Permission::CAMPAIGNS_VIEW)->name('campaigns.show');
+        Route::get('campaigns/{campaign}/cancel', [AdminCampaignController::class, 'confirmCancel'])->middleware('can:'.Permission::CAMPAIGNS_PAUSE)->name('campaigns.cancel');
+        Route::post('campaigns/{campaign}/pause', [AdminCampaignController::class, 'pause'])->middleware('can:'.Permission::CAMPAIGNS_PAUSE)->name('campaigns.pause');
+        Route::post('campaigns/{campaign}/resume', [AdminCampaignController::class, 'resume'])->middleware('can:'.Permission::CAMPAIGNS_PAUSE)->name('campaigns.resume');
+        Route::post('campaigns/{campaign}/cancel', [AdminCampaignController::class, 'cancel'])->middleware('can:'.Permission::CAMPAIGNS_PAUSE)->name('campaigns.confirm');
 
         Route::get('jobs', JobController::class)->middleware('can:'.Permission::JOBS_VIEW)->name('jobs.index');
         Route::get('runs', RunController::class)->middleware('can:'.Permission::JOBS_VIEW)->name('runs.index');

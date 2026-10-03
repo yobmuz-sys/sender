@@ -137,9 +137,16 @@ enum CampaignStatus: string
      *
      * A completed campaign cannot be cancelled: there is nothing left to stop, and
      * reporting "cancelled" on finished work would make the history wrong.
+     *
+     * A *draft* cannot be cancelled either, and the reason is the same from the
+     * other side. Nothing has been sent, so cancelling stops nothing — while it does
+     * make the draft uneditable and unstartable, because a cancelled campaign is
+     * terminal and configuration edits are refused from that state. So the action
+     * would take away a customer's work in exchange for no operational benefit.
+     * Deleting a draft is a different thing and is not this method.
      */
     public function allowsCancel(): bool
     {
-        return ! $this->isTerminal();
+        return ! $this->isTerminal() && $this !== self::Draft;
     }
 }

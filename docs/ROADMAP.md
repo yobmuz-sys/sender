@@ -797,6 +797,64 @@ the status filter are read once, with an option disabled when it would return
 nothing, because a dropdown offering "Failed (0)" invites a click that produces an
 empty table and the suspicion of a bug.
 
+### An operator sees the same facts, and has less authority than the owner
+
+Stage 5D replaces the staged `/admin/campaigns` shell with an operations area, and
+the reason to build it now is that the customer side is finally worth watching. The
+page is not `/campaigns` with more columns. A customer asks what their campaigns are
+doing; an operator asks whose campaign is this, which transport it is on, and is
+anything wrong — and the second question is the one that needs an answer nobody else
+can give.
+
+**The counts are the same counts.** `CampaignCountColumns` generates the recipient
+subqueries from `CampaignRecipientStatus`, and both indexes — the customer's and the
+operator's — select them as correlated subqueries in the same statement as the page
+of campaigns. Nothing is counted in PHP. The reason is not style: an operator
+looking at twelve thousand campaigns is the first user this page would fail for, and
+two hand-written copies of the same aggregate are two places for the two pages to
+disagree about how many people a campaign reached.
+
+**Progress is `CampaignProgress`.** Not a second formula. An administrator and an
+owner reading the same campaign must be told the same thing about it, or one of them
+is being lied to. The operator's row adds the owner's identity, the transport and the
+lifecycle timestamps; everything else is the customer's own read model.
+
+**Incidents are first, and are not filtered.** Paused and failed campaigns are listed
+above the table with the reason recorded when they stopped, quoted from the same
+`CampaignInterruption` the customer sees. That section ignores the filters on purpose:
+the one thing an operator must not be able to do is narrow the list until the
+trouble is out of sight. Bounded at ten, with the true total beside it, because a page
+of four hundred stopped campaigns is not a list a person reads before deciding what
+to do.
+
+**There is no "healthy" filter.** The activity filter offers *moving*, *stalled* and
+*stopped*, and each is a condition on a real timestamp or state. *Stalled* is the one
+worth arguing for: a campaign whose worker has not run in two days still correctly
+says `running`, because nothing in the platform knows it is stuck. The difference is
+visible from `last_activity_at`, so the table can show it as a label — without
+inventing a health score nobody can compute, and without rewriting the campaign's
+status to match a suspicion.
+
+**Administration is not authority over the campaign.** There are six routes and none
+of them launches, edits, schedules or re-transports anything. No "move to another
+SMTP", no rotation, no override of a blocking preflight or a lapsed verification. An
+operator can diagnose and stop; the customer launches. The three interventions that
+do exist call the same `pause()`, `resume()` and `cancel()` the customer's own
+buttons call, re-checking `allowsPause()` and friends server-side, so a permission
+decides *who may ask* and the campaign's state decides *whether it is allowed*.
+
+`campaigns.view` and `campaigns.pause` are separate permissions, and the difference
+is not cosmetic: Support holds the first and not the second. Watching campaigns
+happen is a diagnostic privilege; stopping one is an operational one.
+
+**A draft cannot be cancelled.** Found while building the cancel confirmation: the
+domain allowed cancelling a draft, which stops nothing and makes the draft
+uneditable, because cancelled is terminal. The state now refuses it.
+
+**Affected campaigns are queryable.** `campaignsUsingTransport()` and the per-campaign
+"n campaigns on the platform use this account" figure exist now, so the SMTP account
+page can later answer "what is this failure affecting" without a second read model.
+
 ### A campaign is a frozen sending job
 
 The invariant the whole stage is arranged around:

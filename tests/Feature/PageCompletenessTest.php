@@ -111,6 +111,10 @@ class PageCompletenessTest extends TestCase
             'roles' => ['/admin/roles', Permission::USERS_VIEW],
             'features' => ['/admin/features', Permission::FEATURES_VIEW],
             'plans' => ['/admin/plans', Permission::PLANS_VIEW],
+            // The campaign list is real, so it is covered by the same two guarantees
+            // as every other administrative page: it renders for an administrator and
+            // it is forbidden to a customer. Its detail routes need a campaign to
+            // exist, so they are covered in the admin campaign tests instead.
             'campaigns' => ['/admin/campaigns', Permission::CAMPAIGNS_VIEW],
             'jobs' => ['/admin/jobs', Permission::JOBS_VIEW],
             'runs' => ['/admin/runs', Permission::JOBS_VIEW],
@@ -316,7 +320,6 @@ class PageCompletenessTest extends TestCase
         foreach ([
             '/admin/features',
             '/admin/plans',
-            '/admin/campaigns',
             '/admin/api',
             '/admin/billing',
             '/admin/audit',
@@ -335,11 +338,11 @@ class PageCompletenessTest extends TestCase
         // yet would be an invented dependency, so the tables it must not touch
         // are named explicitly here.
         //
-        // Campaigns is no longer one of them: the campaign domain now exists, and
-        // only the *administrative* campaigns page is still a placeholder. That
-        // distinction is the point of this test — the page being pending says
-        // nothing about the tables the product now has.
-        $this->actingAs($staff)->get('/admin/campaigns')->assertOk();
+        // Campaigns is no longer one of them, in either direction: the customer
+        // campaign pages and the administrative ones are all real now, and this
+        // test used to assert that `/admin/campaigns` was a shell. That is the point
+        // of the suite — a page leaving the pending list is a page that became
+        // real, and it stops being listed here the moment it does.
         $this->actingAs($staff)->get('/admin/plans')->assertOk();
 
         $this->assertFalse(

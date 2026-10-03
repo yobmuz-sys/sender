@@ -93,13 +93,17 @@ of them should be "fixed" by weakening a threshold or a check.
 6. **Run evidence is a record of outcomes, not a progress model.** Runs are
    deliberately minimal: no chunking, progress or dependency graph. Those belong
    to the workload that needs them.
-7. **Placeholder pages carry no behaviour.** Features, plans, files, analytics, the
-   administrative campaigns page, API, billing and audit are rendered as explicit
-   "not yet available" shells. They query no domain table, because no such table
-   exists yet and inventing one would fabricate a dependency. The *customer*
-   campaign pages are real as of Stage 5C: a campaign freezes its message and its
-   audience at launch and sends them from a bounded worker, and the list counts what
-   its recipient rows say rather than estimating from a status column.
+7. **Placeholder pages carry no behaviour.** Features, plans, files, analytics, API,
+   billing and audit are rendered as explicit "not yet available" shells. They query
+   no domain table, because no such table exists yet and inventing one would
+   fabricate a dependency. The *customer* campaign pages are real as of Stage 5C: a
+   campaign freezes its message and its audience at launch and sends them from a
+   bounded worker, and the list counts what its recipient rows say rather than
+   estimating from a status column. The administrative campaigns area is real as of
+   Stage 5D: it watches every tenant's campaigns and reports what is stopped and
+   why, but it can only pause, resume or cancel — an operator has no standing to
+   launch, edit or re-transport somebody's campaign, and the three interventions it
+   does have go through the same domain rules the customer's own buttons do.
 8. **One URL per extraction, and no query string.** `source_type` is `paste` or
    `url`; a URL extraction fetches exactly one address. `source_ref` is stored
    without its query string, because it is both what the worker fetches and
