@@ -27,6 +27,11 @@
         'ready' => 'bg-emerald-100 text-emerald-800 ring-emerald-200',
         'cancelled' => 'bg-slate-100 text-slate-600 ring-slate-200',
 
+        // Saved content that cannot be used yet. Amber rather than slate: it is
+        // not a neutral state, it needs attention, and slate would read as
+        // "nothing to see here".
+        'draft' => 'bg-amber-100 text-amber-800 ring-amber-200',
+
         // The four validation classifications, keyed by the tone their enum
         // returns. These four are the most important colours in the product: a
         // green "likely active" and a red "confirmed inactive" are what a

@@ -5,4 +5,13 @@
     @isset($description)
         <p class="mx-auto mt-1 max-w-xl text-sm text-slate-600">{{ $description }}</p>
     @endisset
+
+    {{--
+        An empty state that explains a situation and then offers no way out of it
+        is a dead end, so a caller may supply the one action that resolves it. The
+        slot is optional: an empty state with nothing to offer is still honest.
+    --}}
+    @isset($actions)
+        <div class="mt-4 flex flex-wrap items-center justify-center gap-2">{{ $actions }}</div>
+    @endisset
 </div>

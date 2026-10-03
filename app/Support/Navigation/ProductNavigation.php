@@ -34,6 +34,8 @@ final class ProductNavigation
             // Real as of Stage 5B. A list holds canonical contacts rather than
             // copies, and is the unit a later campaign stage will select from.
             new NavigationItem('Lists', 'lists.index', matchPrefix: true),
+            // Real as of Stage 5C: reusable message content, versioned so that
+            // editing it cannot change what a running campaign is sending.
             new NavigationItem('Templates', 'templates.index', matchPrefix: true),
             new NavigationItem('Campaigns', 'campaigns.index', matchPrefix: true),
             // Real: addresses this account will never contact, with the reason

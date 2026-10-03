@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Domain\Templates\Template;
 use App\Domain\Users\Enums\Role;
 use App\Domain\Users\Permission;
 use App\Models\ContactList;
@@ -83,7 +84,7 @@ class PageCompletenessTest extends TestCase
             'lists record' => ['/lists/1'],
             'templates' => ['/templates'],
             'templates new' => ['/templates/new'],
-            'templates record' => ['/templates/abc'],
+            'templates record' => ['/templates/1'],
             'campaigns' => ['/campaigns'],
             'campaigns new' => ['/campaigns/new'],
             'campaigns record' => ['/campaigns/abc'],
@@ -176,10 +177,14 @@ class PageCompletenessTest extends TestCase
         $user = User::factory()->create();
 
         // A record page needs a record the account actually owns. A slug-shaped
-        // path would render a shell, but lists are real rows now, and an empty
-        // detail page proves nothing about the real one.
+        // path would render a shell, but lists and templates are real rows now, and
+        // an empty detail page proves nothing about the real one.
         if ($path === '/lists/1') {
             ContactList::factory()->for($user)->create();
+        }
+
+        if ($path === '/templates/1') {
+            Template::factory()->for($user)->create();
         }
 
         $this->actingAs($user)

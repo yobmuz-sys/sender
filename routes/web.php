@@ -41,6 +41,7 @@ use App\Http\Controllers\Auth\VerifyEmailController;
 use App\Http\Controllers\DiagnosticsController;
 use App\Http\Controllers\ExtractorController;
 use App\Http\Controllers\PendingFeatureController;
+use App\Http\Controllers\Templates\TemplateController;
 use App\Http\Controllers\UnsubscribeController;
 use Illuminate\Support\Facades\Route;
 
@@ -201,12 +202,31 @@ Route::middleware(['auth', 'confirmed'])->group(function (): void {
     Route::get('files/{file}', PendingFeatureController::class)
         ->defaults('section', 'files')->name('files.show');
 
-    Route::get('templates', PendingFeatureController::class)
-        ->defaults('section', 'templates')->name('templates.index');
-    Route::get('templates/new', PendingFeatureController::class)
-        ->defaults('section', 'templates')->defaults('record', 'new')->name('templates.create');
-    Route::get('templates/{template}', PendingFeatureController::class)
-        ->defaults('section', 'templates')->name('templates.show');
+    /*
+    |--------------------------------------------------------------------------
+    | Templates
+    |--------------------------------------------------------------------------
+    |
+    | Real pages as of Stage 5C, replacing the three staged shells. The record
+    | routes are keyed on the numeric id and ownership is scoped in the
+    | controller, so another tenant's template is a 404 rather than a forbidden
+    | page — the same pattern the lists above use.
+    |
+    | `duplicate` is a POST because it creates a record. It is deliberately not a
+    | GET: a customer who follows a duplicate link from an email or a shared tab
+    | would otherwise create templates they never asked for.
+    |
+    */
+    Route::prefix('templates')->name('templates.')->group(function (): void {
+        Route::get('/', [TemplateController::class, 'index'])->name('index');
+        Route::get('new', [TemplateController::class, 'create'])->name('create');
+        Route::post('/', [TemplateController::class, 'store'])->name('store');
+        Route::get('{template}', [TemplateController::class, 'show'])->name('show');
+        Route::get('{template}/edit', [TemplateController::class, 'edit'])->name('edit');
+        Route::put('{template}', [TemplateController::class, 'update'])->name('update');
+        Route::delete('{template}', [TemplateController::class, 'destroy'])->name('destroy');
+        Route::post('{template}/duplicate', [TemplateController::class, 'duplicate'])->name('duplicate');
+    });
 
     Route::get('campaigns', PendingFeatureController::class)
         ->defaults('section', 'campaigns')->name('campaigns.index');
