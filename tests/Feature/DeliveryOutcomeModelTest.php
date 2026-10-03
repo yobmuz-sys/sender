@@ -68,6 +68,19 @@ class DeliveryOutcomeModelTest extends CampaignTestCase
     }
 
     #[Test]
+    public function a_port_in_a_connection_error_is_not_read_as_a_status_code(): void
+    {
+        // The words Symfony produces when a submission never gets an answer. Reading
+        // `587` as a status code put a timeout into the 5xx branch — a timeout
+        // reported as a refusal, with a code attached to make it look evidenced —
+        // which is the exact inversion the ambiguous outcome exists to prevent.
+        $result = $this->classify('Connection to smtp.example.test:587 timed out');
+
+        $this->assertSame(DeliveryOutcome::Ambiguous, $result['outcome']);
+        $this->assertNull($result['code']);
+    }
+
+    #[Test]
     public function a_rejected_login_is_a_transport_problem_and_not_a_message_problem(): void
     {
         // The distinction that stops one refused login from marking a thousand

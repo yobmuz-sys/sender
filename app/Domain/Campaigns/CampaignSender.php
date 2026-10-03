@@ -44,6 +44,7 @@ class CampaignSender
         private readonly UnsubscribeLink $links,
         private readonly SuppressionList $suppressions,
         private readonly RetryPolicy $retries,
+        private readonly LogicalMessageId $messageIds,
     ) {}
 
     /**
@@ -91,7 +92,7 @@ class CampaignSender
         }
 
         try {
-            $outcome = $this->submit($campaign, $contact);
+            $outcome = $this->submit($campaign, $recipient, $contact);
         } catch (Throwable $exception) {
             // A throw from here is a fault in this platform rather than a server's
             // opinion, so it is recorded as a transport failure and stops the
@@ -122,6 +123,7 @@ class CampaignSender
                 null,
                 null,
                 $outcome->messageId,
+                $recipient->message_id,
             );
         }
 
@@ -143,13 +145,20 @@ class CampaignSender
             $outcome->code,
             $message,
             $outcome->messageId,
+            $recipient->message_id,
         );
     }
 
     /**
      * Render and submit, using only the campaign's frozen content.
+     *
+     * The identifier is resolved here, before the transport is called, so that what
+     * goes on the wire is a value the database already holds. Assigning it inside
+     * the transport would mean a submission could carry an identifier that a crash
+     * moments later would erase, and a bounce for that message would then correlate
+     * to nothing at all.
      */
-    private function submit(Campaign $campaign, Contact $contact): TransportResult
+    private function submit(Campaign $campaign, CampaignRecipient $recipient, Contact $contact): TransportResult
     {
         $account = $campaign->smtpAccount;
 
@@ -173,6 +182,7 @@ class CampaignSender
             $from,
             (string) $contact->email,
             $this->links->url($contact),
+            $recipient->ensureMessageId($this->messageIds),
         );
     }
 
@@ -217,7 +227,8 @@ class CampaignSender
         AttemptResult $result,
         ?string $code = null,
         ?string $detail = null,
-        ?string $messageId = null,
+        ?string $providerMessageId = null,
+        ?string $submittedMessageId = null,
     ): AttemptResult {
         DeliveryAttempt::query()->create([
             'campaign_recipient_id' => $recipient->id,
@@ -227,7 +238,20 @@ class CampaignSender
             'result' => $result->value,
             'smtp_code' => $code,
             'smtp_response' => $detail,
-            'provider_message_id' => $messageId,
+            'provider_message_id' => $providerMessageId,
+
+            // What this attempt put on the wire, as opposed to what the server
+            // called it, and passed in rather than read off the recipient because the
+            // recipient has one even when nothing was ever sent — a blocked recipient
+            // is assigned at launch like any other. Repeating it here would make
+            // every attempt row look like a submission, including the ones recorded
+            // precisely because nothing was submitted.
+            //
+            // Null for a deleted contact, a suppressed one, or a fault inside this
+            // platform: no message was submitted, so there was no identifier to
+            // record. The same value on every attempt that did submit, which is the
+            // property Stage 5D's correlation rests on.
+            'message_id' => $submittedMessageId,
         ]);
 
         return $result;

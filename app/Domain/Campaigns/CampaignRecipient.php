@@ -23,6 +23,7 @@ use Illuminate\Support\Facades\DB;
  *
  * @property CampaignRecipientStatus $status
  * @property int $attempts
+ * @property string|null $message_id
  */
 class CampaignRecipient extends Model
 {
@@ -159,6 +160,80 @@ class CampaignRecipient extends Model
         $this->syncOriginalAttributes(['status', 'claimed_at']);
 
         return true;
+    }
+
+    /**
+     * This recipient's identifier, generating and persisting one if it has none.
+     *
+     * The normal path is that {@see AudienceSnapshot} gives every recipient an
+     * identifier at launch, the moment the campaign's content and audience are both
+     * frozen and the logical message therefore exists. This method exists for the
+     * rows that predate that: a campaign launched before this column did, and a
+     * recipient whose identifier is null for any other reason.
+     *
+     * It never replaces an existing value. That is the entire property this task is
+     * about — a retry has to submit the identifier the first attempt submitted, or
+     * the identifier means nothing beyond the attempt that happened to be current.
+     * Regenerating it here "to be safe" would be the original defect, moved.
+     *
+     * The write is a separate query rather than part of the caller's `save()` on
+     * purpose: this runs between claiming the row and submitting, and a write that
+     * coalesces into a later save would leave a submission whose identifier was
+     * never stored if the process died in between. Persisting it on its own means
+     * the identifier on the wire is always one the database already holds.
+     */
+    public function ensureMessageId(LogicalMessageId $ids): string
+    {
+        $existing = $this->message_id;
+
+        if (is_string($existing) && $existing !== '') {
+            return $existing;
+        }
+
+        $generated = $ids->generate();
+
+        $this->forceFill(['message_id' => $generated])->save();
+
+        return $generated;
+    }
+
+    /**
+     * The recipient a message identifier belongs to.
+     *
+     * For Stage 5D, and deliberately the only way in. Provider feedback arrives
+     * carrying a `Message-ID` and nothing else this platform can trust, so the
+     * lookup is the whole of the correlation contract: identifier in, recipient out,
+     * and from there the campaign and the contact are relations.
+     *
+     * Null when the identifier is one this platform never issued — an unknown
+     * message, or one from before this platform sent it. Callers must treat that as
+     * "no evidence", not as "no recipient": the alternative is to fall back to
+     * guessing from the address and a time window, which is how a bounce gets
+     * blamed on someone who never received the message.
+     *
+     * Case-insensitive on the identifier, because a receiving server is free to
+     * report the header as it received it and nothing requires it to preserve the
+     * case of the local part it was given. Tried as an exact match first so the
+     * overwhelmingly common case is an index hit; the case-folding comparison is
+     * the fallback and does read the column.
+     */
+    public static function findByMessageId(string $messageId): ?self
+    {
+        $trimmed = trim($messageId);
+
+        if ($trimmed === '') {
+            return null;
+        }
+
+        $exact = static::query()->where('message_id', $trimmed)->first();
+
+        if ($exact instanceof self) {
+            return $exact;
+        }
+
+        return static::query()
+            ->whereRaw('lower(message_id) = ?', [mb_strtolower($trimmed)])
+            ->first();
     }
 
     /**

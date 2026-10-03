@@ -874,13 +874,66 @@ Two further findings from the same audit, both now fixed:
   `SmtpFailureClassifier`, a class of its own, because the decision that determines
   whether a message is sent again belongs somewhere it can be asserted about directly.
 
-**Known limitation, carried into Stage 5D rather than fixed here.** The `Message-ID` is
-generated per *submission attempt*, so a retried message carries a different identifier
-from the one that failed. Feedback correlation is built on `Message-ID`, so a bounce
-arriving against the first attempt would correlate to nothing once a second had been
-sent. Making the identifier stable per logical message — per recipient, not per attempt —
-is the right fix, and it belongs with the correlation code that consumes it rather than
-being changed underneath this stage.
+### One identifier per message, and the audit of what was never run
+
+The limitation above is now fixed, deliberately as its own commit before any feedback
+code exists, because the correlation Stage 5D is built on is worth exactly as much as
+the identifier it keys on.
+
+`campaign_recipients.message_id` is one identifier per *logical outbound message*,
+generated at launch — when the content is frozen and the audience is decided, which is
+the moment the message starts to exist — and persisted before anything is submitted.
+Every attempt submits it. Attempt 1, attempt 2, attempt 3: one identifier, so a bounce
+quoting it resolves to a message a person was actually sent rather than to whichever
+attempt happened to be current.
+
+It is assigned at launch rather than lazily because a recipient that never sends is
+still a message the campaign decided to send, and a column that is populated only
+sometimes is a conditional every later query has to remember. It is nullable only for
+recipients belonging to campaigns launched before the column existed; the sender fills
+a missing value in before its first submission, and never replaces one that is there.
+
+`delivery_attempts.message_id` records the identifier that attempt actually put on the
+wire — a copy, redundant by construction, kept because an audit trail that has to be
+reconstructed by joining is not one. It is null for an attempt that submitted nothing,
+which is the honest value: a blocked recipient has an identifier, but no message left.
+
+`CampaignRecipient::findByMessageId()` is the whole of the correlation contract for
+now: identifier in, recipient out, and from there the campaign and the contact are
+relations. An identifier this platform never issued returns null, and there is no
+fallback to matching on the address and a time window — that is how a bounce ends up
+blamed on somebody who never received the message.
+
+**Testing the real path found two defects that had never been executed by anything.**
+
+The instruction was to test message construction through the production transport
+rather than the recording double. Doing so immediately produced a compile error and
+then two runtime ones, in the same method, on every submission:
+
+- `IsolatedMailer::mailer()` passed its arguments to Laravel's `Mailer` in the wrong
+  order (`$name, $transport, $views` against a `$name, $views, $transport`
+  signature). An immediate `TypeError`, raised inside the transport's `try` block,
+  and therefore reported as an *ambiguous failure against the message*. It did not
+  crash the campaign loudly; it made every campaign send nothing and record every
+  recipient as unacknowledged.
+- The mail closure called `$mail->messageId()` and read `$mail->headers`, neither of
+  which exists. `Illuminate\Mail\Message` forwards unknown methods to Symfony's
+  `Email`, which offers neither. Headers now go on the MIME message directly, which
+  is also the only way to get *one* `Message-ID`: Symfony generates its own when the
+  message has none.
+
+Together with the compile error fixed in the previous commit, that is three ways for
+a real campaign through a real SMTP account to have failed on its first message — and
+every campaign test in this repository substitutes a recording transport, so none of
+them could ever have caught any of it.
+
+**And the first test through the real transport found a fourth, in the classifier.**
+`Connection to smtp.example.test:587 timed out` matched `\b([45]\d{2})\b` on the
+*port*, landed in the `5xx` branch, and was reported as a server that refused the
+message — with a code attached, so it looked evidenced. A timeout is the canonical case
+of receiving no answer at all, which is exactly what the ambiguous outcome exists to
+stop calling a refusal. A code is no longer read from a number that follows a colon or
+a dot.
 
 ### An operator sees the same facts, and has less authority than the owner
 

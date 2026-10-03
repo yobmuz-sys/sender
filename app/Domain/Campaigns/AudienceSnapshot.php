@@ -39,7 +39,10 @@ class AudienceSnapshot
      */
     private const CHUNK = 500;
 
-    public function __construct(private readonly AudienceEligibility $eligibility) {}
+    public function __construct(
+        private readonly AudienceEligibility $eligibility,
+        private readonly LogicalMessageId $messageIds,
+    ) {}
 
     /**
      * What this campaign would reach, without writing anything.
@@ -71,6 +74,21 @@ class AudienceSnapshot
      * suppressed between the preflight and now. Losing that row entirely would
      * make the campaign's totals silently smaller than its snapshot, and the
      * customer would have no way to tell that somebody unsubscribed a second ago.
+     *
+     * Every row is given its `Message-ID` here, at launch, rather than at the first
+     * attempt. Launch is the moment the message becomes a thing: the content is
+     * frozen and the audience is decided, so the logical message exists even for a
+     * recipient that is never submitted to. A recipient that is suppressed still
+     * gets one — it costs nothing, and a row that has an identifier only sometimes
+     * is the kind of conditional that a later query has to remember.
+     *
+     * `insertOrIgnore` is what makes the retry safe: a second launch generates
+     * fresh identifiers, and every one of them loses to the existing
+     * `campaign_id + contact_id` index. The first launch's identifiers are the ones
+     * that stand, and the unique index on `message_id` is a backstop rather than
+     * the mechanism — two hundred and thirty-four random bits colliding is not a
+     * thing that happens, and if it somehow did, the row would be dropped rather
+     * than merged.
      */
     public function build(Campaign $campaign): AudienceSummary
     {
@@ -104,6 +122,7 @@ class AudienceSnapshot
                         // record of who it was going to contact even after the
                         // contact is deleted.
                         'email' => (string) $contact->email,
+                        'message_id' => $this->messageIds->generate(),
                         'status' => $isSuppressed
                             ? CampaignRecipientStatus::Blocked->value
                             : CampaignRecipientStatus::Queued->value,

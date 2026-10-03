@@ -27,7 +27,7 @@ use App\Domain\Mail\SmtpTransportDefinition;
 final class RecordingTransport implements MessageTransport
 {
     /**
-     * @var list<array{recipient: string, from: string, subject: string, html: string|null, text: string|null, unsubscribe: string, host: string}>
+     * @var list<array{recipient: string, from: string, subject: string, html: string|null, text: string|null, unsubscribe: string, host: string, message_id: string}>
      */
     public array $submitted = [];
 
@@ -74,6 +74,7 @@ final class RecordingTransport implements MessageTransport
         string $from,
         string $recipient,
         string $unsubscribeUrl,
+        string $messageId,
     ): TransportResult {
         $this->submitted[] = [
             'recipient' => $recipient,
@@ -83,13 +84,18 @@ final class RecordingTransport implements MessageTransport
             'text' => $message->text,
             'unsubscribe' => $unsubscribeUrl,
             'host' => $transport->host,
+            'message_id' => $messageId,
         ];
 
         $answer = array_shift($this->answers) ?? ['outcome' => DeliveryOutcome::Accepted, 'code' => null, 'detail' => null];
 
+        // The identifier it was given, not an invented one. The real transport
+        // reports what went on the wire, and a double that reported something else
+        // would make every assertion about identifier stability in the campaign
+        // suite an assertion about the double.
         return TransportResult::failed(
             $answer['outcome'],
-            'test-message-'.(count($this->submitted)).'@example.test',
+            $messageId,
             $answer['code'],
             $answer['detail'],
         );

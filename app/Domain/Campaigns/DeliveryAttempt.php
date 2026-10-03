@@ -22,6 +22,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  *
  * @property AttemptResult $result
  * @property int $attempt_number
+ * @property string|null $message_id
  */
 class DeliveryAttempt extends Model
 {
@@ -34,6 +35,7 @@ class DeliveryAttempt extends Model
         'smtp_code',
         'smtp_response',
         'provider_message_id',
+        'message_id',
     ];
 
     protected function casts(): array

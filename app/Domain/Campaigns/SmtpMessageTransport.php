@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domain\Campaigns;
 
+use App\Domain\Mail\CampaignMailerFactory;
 use App\Domain\Mail\CampaignMessage;
 use App\Domain\Mail\DeliveryOutcome;
 use App\Domain\Mail\MailTransportFactory;
@@ -13,18 +14,21 @@ use Throwable;
 /**
  * Submits one campaign message through one tenant's transport.
  *
- * Built per submission and discarded, through {@see MailTransportFactory}, so it
- * cannot inherit another tenant's credentials — the same reason the verifier builds
+ * Built per submission and discarded, through {@see MailTransportFactory},
+ * so it cannot inherit another tenant's credentials — the same reason the verifier builds
  * its own mailer rather than using the application mailer. `sender:work` processes
  * many jobs in one invocation, so anything that reached global mail configuration
  * would carry one account's settings into the next message on the wire.
  *
  * Two details that matter more than they look:
  *
- *  - **The message id is generated here**, before submission, and put in the
- *    headers. A bounce will arrive naming a message, and matching it to a
- *    submission requires an identifier the platform stored rather than one it
- *    hoped a provider would return.
+ *  - **The message id is put in the headers, and it arrives from the caller.** A
+ *    bounce will arrive naming a message, and matching it to a submission requires
+ *    an identifier the platform stored rather than one it hoped a provider would
+ *    return. It used to be generated in this method, which meant once per attempt:
+ *    a retried message went out under a second identifier and the first one became
+ *    uncorrelatable. {@see LogicalMessageId} now generates it once per recipient,
+ *    and the retry policy cannot reach this code to change it.
  *  - **`List-Unsubscribe` is always sent**, from the platform's own link, in
  *    addition to whatever the customer's template body says. The header is what
  *    mail clients use for a one-click unsubscribe button; the body link is what a
@@ -42,7 +46,7 @@ use Throwable;
 class SmtpMessageTransport implements MessageTransport
 {
     public function __construct(
-        private readonly MailTransportFactory $mailers,
+        private readonly CampaignMailerFactory $mailers,
         private readonly SmtpFailureClassifier $classifier,
     ) {}
 
@@ -52,9 +56,8 @@ class SmtpMessageTransport implements MessageTransport
         string $from,
         string $recipient,
         string $unsubscribeUrl,
+        string $messageId,
     ): TransportResult {
-        $messageId = $this->messageId();
-
         try {
             $built = $this->mailers->for($transport);
         } catch (Throwable $exception) {
@@ -73,16 +76,19 @@ class SmtpMessageTransport implements MessageTransport
 
         try {
             /*
-             * Two different messages, and the difference has to be explicit.
+             * Three different things, and the difference has to be explicit.
              *
              * `$content` is the `CampaignMessage` this campaign froze at launch —
-             * its subject and bodies are what must go on the wire. `$mail` is the
-             * message Symfony is building, handed to the closure. They cannot share
-             * a name: a closure may not both declare a parameter and import the same
-             * variable, so the original version of this line was a fatal error at
-             * compile time. It went unnoticed because every campaign test substitutes
-             * a recording transport, and the error only appears when this class is
-             * loaded — which, in a test suite, it was not.
+             * its subject and bodies are what must go on the wire. `$mail` is Laravel's
+             * wrapper around the message Symfony is building. `$mime` is that Symfony
+             * message, which is the only one of the three that can carry a
+             * `Message-ID` or a `List-Unsubscribe` header.
+             *
+             * They cannot share a name: a closure may not both declare a parameter and
+             * import the same variable, so the original version of this line was a
+             * fatal error at compile time. It went unnoticed because every campaign
+             * test substitutes a recording transport, and the error only appears when
+             * this class is loaded — which, in a test suite, it was not.
              */
             $content = $message;
 
@@ -95,8 +101,7 @@ class SmtpMessageTransport implements MessageTransport
             ): void {
                 $mail->to($recipient)
                     ->from($from)
-                    ->subject($content->subject)
-                    ->messageId($messageId);
+                    ->subject($content->subject);
 
                 if ($content->html !== null) {
                     $mail->html($content->html);
@@ -106,13 +111,32 @@ class SmtpMessageTransport implements MessageTransport
                     $mail->text($content->text);
                 }
 
-                $mail->headers->addTextHeader('List-Unsubscribe', '<'.$unsubscribeUrl.'>');
-                $mail->headers->addTextHeader('List-Unsubscribe-Post', 'List-Unsubscribe=One-Click');
+                /*
+                 * Headers go on the MIME message, not on Laravel's wrapper.
+                 *
+                 * `$mail->headers` and `$mail->messageId()` were both calls to
+                 * methods that do not exist: `Illuminate\Mail\Message` forwards
+                 * unknown methods to the Symfony `Email`, which offers neither
+                 * `headers()` nor `messageId()`. Both raise
+                 * `BadMethodCallException` — on every single submission, from the
+                 * same never-executed method as the compile error above.
+                 *
+                 * Symfony generates a `Message-ID` of its own only when the message
+                 * has none, so setting it here produces exactly one header. A second
+                 * would leave a receiving server to pick which identifier to quote
+                 * back at us, which is not a thing to leave to chance when the
+                 * identifier is the correlation key for every future bounce.
+                 */
+                $mime = $mail->getSymfonyMessage();
+
+                $mime->getHeaders()->addIdHeader('Message-ID', $messageId);
+                $mime->getHeaders()->addTextHeader('List-Unsubscribe', '<'.$unsubscribeUrl.'>');
+                $mime->getHeaders()->addTextHeader('List-Unsubscribe-Post', 'List-Unsubscribe=One-Click');
 
                 // Both, because neither alone is sufficient and adding a header is
                 // not deceptive: they say the same thing in the two formats
                 // clients and providers each read.
-                $mail->headers->addTextHeader('Auto-Submitted', 'auto-generated');
+                $mime->getHeaders()->addTextHeader('Auto-Submitted', 'auto-generated');
             });
         } catch (Throwable $exception) {
             return $this->classify($exception, $messageId);
@@ -144,13 +168,5 @@ class SmtpMessageTransport implements MessageTransport
         $classified = $this->classifier->classify($text);
 
         return TransportResult::failed($classified['outcome'], $messageId, $classified['code'], $text);
-    }
-
-    /**
-     * A message identifier this platform controls.
-     */
-    private function messageId(): string
-    {
-        return 'campaign-'.bin2hex(random_bytes(12)).'@'.parse_url((string) config('app.url'), PHP_URL_HOST);
     }
 }

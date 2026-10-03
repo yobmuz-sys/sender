@@ -30,7 +30,7 @@ use Symfony\Component\Mailer\Transport\Smtp\Stream\SocketStream;
  * Each call produces a fresh transport, which is also what keeps a connection
  * from being reused across accounts.
  */
-final class MailTransportFactory
+final class MailTransportFactory implements CampaignMailerFactory
 {
     public function __construct(private readonly ViewFactory $views) {}
 

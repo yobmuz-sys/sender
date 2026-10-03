@@ -77,10 +77,21 @@ final class SmtpFailureClassifier
      * The SMTP status code in a server's reply, if there is one.
      *
      * Matched as three digits that stand alone, so a queue id or a remote address
-     * containing digits is not mistaken for a code.
+     * containing digits is not mistaken for a code — and explicitly not a number
+     * that follows a colon or a dot, which is where a port in `smtp.host:587` lives.
+     *
+     * That exclusion is not cosmetic. A connection that times out produces
+     * `Connection to smtp.example.test:587 timed out`, and reading `587` as a status
+     * code made a timeout land in the `5xx` branch — reported as a server that refused
+     * the message, with a code to prove it. A timeout is the canonical case of having
+     * received no answer at all, which is precisely what this class exists to stop
+     * calling a refusal. It was found by the first test that drives the real transport
+     * rather than a classifier double.
      */
     private function code(string $text): ?string
     {
-        return preg_match('/\b([45]\d{2})\b/', $text, $matches) === 1 ? $matches[1] : null;
+        return preg_match('/(?<![\w:.])([45]\d{2})(?![\w.])/', $text, $matches) === 1
+            ? $matches[1]
+            : null;
     }
 }
