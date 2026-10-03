@@ -51,6 +51,23 @@ class CampaignRunner
      */
     private const RUN_BUDGET_SECONDS = 180;
 
+    /**
+     * Consecutive unconfirmed submissions that stop the campaign.
+     *
+     * An ambiguous outcome is never retried, so without this a broken transport
+     * would walk the entire audience leaving every one of them `unknown` — a
+     * campaign that contacted nobody and reported itself as finished, with an
+     * unaccounted message sitting in a provider's queue for each.
+     *
+     * Three rather than one, for a reason that is about honesty rather than
+     * caution: a single missing reply is genuinely indistinguishable from a
+     * connection lost before the message was submitted, and halting a 50,000
+     * recipient campaign on the strength of one blip would be its own kind of
+     * false conclusion. Three in a row is not a blip, and the ones recorded before
+     * the third are three recipients whose status is honestly "we do not know".
+     */
+    private const AMBIGUOUS_STREAK_LIMIT = 3;
+
     public function __construct(
         private readonly CampaignSender $sender,
         private readonly CampaignPreflight $preflight,
@@ -151,6 +168,38 @@ class CampaignRunner
                 );
             }
 
+            if ($outcome === AttemptResult::Ambiguous) {
+                /*
+                 * Never retried — that recipient is already terminal — but counted,
+                 * because nothing else bounds this.
+                 *
+                 * The streak is read from the recipient rows rather than a variable,
+                 * and that is not a stylistic choice. Pacing means a run normally
+                 * sends one message and defers, so three unconfirmed submissions are
+                 * three worker invocations rather than three iterations of this loop,
+                 * and an in-memory counter would reset to zero every time. Without
+                 * this, a broken transport would walk the whole audience leaving every
+                 * recipient unconfirmed: a campaign that contacted nobody and
+                 * reported itself finished, with an unaccounted message in a queue
+                 * for each.
+                 */
+                if ($this->unconfirmedStreak($campaign) >= self::AMBIGUOUS_STREAK_LIMIT) {
+                    $campaign->markFailed(
+                        'The sending transport stopped replying: '.self::AMBIGUOUS_STREAK_LIMIT
+                            .' of the most recent submissions produced no result at all, so the campaign '
+                            .'was stopped. Those messages may have been accepted by a server that never '
+                            .'replied, which is why they are recorded as unconfirmed rather than sent again '
+                            .'automatically — resending them could deliver the same message twice.',
+                    );
+
+                    return CampaignRunOutcome::stopped(
+                        'The transport stopped replying, so the campaign was stopped.',
+                        $sent,
+                        $failed,
+                    );
+                }
+            }
+
             $this->advancePace($campaign, $interval);
             $campaign->touchActivity();
         }
@@ -170,6 +219,29 @@ class CampaignRunner
             ->due(self::CLAIM_STALE_AFTER_SECONDS)
             ->orderBy('id')
             ->first();
+    }
+
+    /**
+     * How many of this campaign's most recent submissions came back with no result.
+     *
+     * Read from the recipient rows rather than counted as the run proceeds, because a
+     * run normally sends one message and defers — the three submissions that trip the
+     * limit happen across three worker invocations, hours apart, and a counter held
+     * in memory would forget the first two.
+     *
+     * Only recipients that were actually attempted are considered. A queued one has
+     * a null `last_attempt_at` and says nothing about the transport.
+     */
+    private function unconfirmedStreak(Campaign $campaign): int
+    {
+        return CampaignRecipient::query()
+            ->where('campaign_id', $campaign->id)
+            ->whereNotNull('last_attempt_at')
+            ->orderByDesc('last_attempt_at')
+            ->orderByDesc('id')
+            ->limit(self::AMBIGUOUS_STREAK_LIMIT)
+            ->where('status', CampaignRecipientStatus::Unknown->value)
+            ->count();
     }
 
     /**

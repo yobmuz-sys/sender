@@ -57,6 +57,12 @@ final readonly class TransportResult
      * permanent failure of that message, not of the transport; a rejected
      * *transport* is neither, and stopping the campaign is the right response to
      * both of those rather than retrying them.
+     *
+     * `Ambiguous` and `ConnectionFailed` both mean the same thing to a campaign: the
+     * exchange produced no status. They are kept apart upstream because a transport
+     * may report the failure itself and the application may have to infer it, but
+     * once it reaches a recipient there is one fact and one correct response — the
+     * message may have been accepted, so it is not sent again.
      */
     public function attemptResult(): AttemptResult
     {
@@ -65,8 +71,9 @@ final readonly class TransportResult
             DeliveryOutcome::TemporaryFailure => AttemptResult::TemporaryFailure,
             DeliveryOutcome::RecipientRejected,
             DeliveryOutcome::PermanentFailure => AttemptResult::PermanentFailure,
-            DeliveryOutcome::AuthenticationRejected,
-            DeliveryOutcome::ConnectionFailed => AttemptResult::TransportFailure,
+            DeliveryOutcome::AuthenticationRejected => AttemptResult::TransportFailure,
+            DeliveryOutcome::Ambiguous,
+            DeliveryOutcome::ConnectionFailed => AttemptResult::Ambiguous,
         };
     }
 }

@@ -57,6 +57,22 @@ enum AttemptResult: string
      */
     case Skipped = 'skipped';
 
+    /**
+     * Submitted, and the platform never heard what the server said.
+     *
+     * The one outcome that is neither success nor refusal, and the reason this
+     * vocabulary has a case that is deliberately not one of the two. The exchange
+     * ended without a status code, so the platform cannot establish whether the
+     * provider accepted the message. It is not recorded as accepted, because that
+     * would claim a certainty nobody has; and it is not retried, because the
+     * message may already be sitting in a provider's queue and sending it again
+     * would put two copies of the same mail in one person's inbox.
+     *
+     * A recipient in this state stays there. Somebody decides whether to send again
+     * — not a retry policy, and not a worker on a later pass.
+     */
+    case Ambiguous = 'ambiguous';
+
     public function label(): string
     {
         return match ($this) {
@@ -66,6 +82,7 @@ enum AttemptResult: string
             self::TransportFailure => 'Transport failure',
             self::Blocked => 'Blocked before sending',
             self::Skipped => 'Skipped',
+            self::Ambiguous => 'No reply from the server',
         };
     }
 
@@ -75,6 +92,15 @@ enum AttemptResult: string
      * Only a temporary failure. Everything else is either done or a problem a
      * person has to resolve, and retrying it automatically is how a sender ends up
      * pressing on against a provider that has already said no.
+     *
+     * `Ambiguous` is in the "no" column deliberately, and the reason is worth stating
+     * plainly because it is the one case where the conservative answer and the
+     * helpful answer disagree. It would be convenient to treat a missing reply as a
+     * connection blip and try again; but a missing reply is exactly what a lost
+     * `250` after acceptance looks like, and this platform would then be the thing
+     * that decides a provider may deliver the same campaign twice. An operator who
+     * knows the first attempt did not land can start a new campaign; the platform
+     * cannot know that, so it does not assume it.
      */
     public function isRetryable(): bool
     {
@@ -88,6 +114,7 @@ enum AttemptResult: string
             self::TemporaryFailure => 'amber',
             self::PermanentFailure, self::TransportFailure => 'rose',
             self::Blocked, self::Skipped => 'slate',
+            self::Ambiguous => 'amber',
         };
     }
 
@@ -108,6 +135,7 @@ enum AttemptResult: string
             self::TransportFailure => 'The connection or the sending account itself failed. Nothing about this recipient caused it.',
             self::Blocked => 'The platform refused before contacting any server: this person had asked not to be contacted before their turn came up.',
             self::Skipped => 'There was nobody to send to. No server was contacted and no decision was made.',
+            self::Ambiguous => 'This message was submitted and no reply came back, so we cannot say whether the server took it. It is not being sent again automatically, because if the first attempt did land, sending it twice would deliver it twice.',
         };
     }
 }

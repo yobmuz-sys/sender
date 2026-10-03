@@ -102,7 +102,7 @@ class AdminCampaignOperationsTest extends CampaignTestCase
         $paused->pause();
 
         $failed = $this->sendingCampaign($customer, 1, ['name' => 'failed one']);
-        $this->transport->answering(DeliveryOutcome::ConnectionFailed, '421', 'Unavailable');
+        $this->transport->answering(DeliveryOutcome::AuthenticationRejected, '535', 'Authentication credentials invalid');
         $this->sendOne($failed);
 
         $this->assertSame(CampaignStatus::Failed, $failed->fresh()->status);
@@ -139,7 +139,7 @@ class AdminCampaignOperationsTest extends CampaignTestCase
         $this->sendingCampaign($customer, 1, ['name' => 'the healthy one']);
 
         $failed = $this->sendingCampaign($customer, 2, ['name' => 'broken transport']);
-        $this->transport->answering(DeliveryOutcome::ConnectionFailed, '421', 'Service not available');
+        $this->transport->answering(DeliveryOutcome::AuthenticationRejected, '535', 'Authentication credentials invalid');
         $this->sendOne($failed);
 
         $paused = $this->sendingCampaign($customer, 2, ['name' => 'held by a person']);
@@ -426,7 +426,7 @@ class AdminCampaignOperationsTest extends CampaignTestCase
         $customer = $this->signedInTenant();
         $campaign = $this->sendingCampaign($customer, 2, ['name' => 'broken transport']);
 
-        $this->transport->answering(DeliveryOutcome::ConnectionFailed, '421', 'Service unavailable');
+        $this->transport->answering(DeliveryOutcome::AuthenticationRejected, '535', 'Authentication credentials invalid');
         $this->sendOne($campaign);
 
         $body = $this->actingAs($this->operator())

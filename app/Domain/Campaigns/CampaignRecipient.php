@@ -252,6 +252,10 @@ class CampaignRecipient extends Model
         return match ($result) {
             AttemptResult::Blocked => CampaignRecipientStatus::Blocked,
             AttemptResult::Skipped => CampaignRecipientStatus::Skipped,
+            // Its own state, not `failed`. The server did not refuse this message —
+            // nobody heard from it — and reporting a refusal would tell the customer
+            // the safe thing to do was send it again.
+            AttemptResult::Ambiguous => CampaignRecipientStatus::Unknown,
             default => CampaignRecipientStatus::Failed,
         };
     }

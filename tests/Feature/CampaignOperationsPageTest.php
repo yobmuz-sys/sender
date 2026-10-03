@@ -151,7 +151,7 @@ class CampaignOperationsPageTest extends CampaignTestCase
         $user = $this->signedInTenant();
         $campaign = $this->sendingCampaign($user, 3);
 
-        $this->transport->answering(DeliveryOutcome::ConnectionFailed, '421', 'Service not available');
+        $this->transport->answering(DeliveryOutcome::AuthenticationRejected, '535', 'Authentication credentials invalid');
         $this->sendOne($campaign);
 
         $this->assertSame(CampaignStatus::Failed, $campaign->fresh()->status);
@@ -161,7 +161,7 @@ class CampaignOperationsPageTest extends CampaignTestCase
         $this->assertIsString($body);
         $this->assertStringContainsString('Sending stopped by a problem', $body);
         $this->assertStringContainsString('stopped rather than switched to another transport', $body);
-        $this->assertStringContainsString('421', $body);
+        $this->assertStringContainsString('535', $body);
 
         // The page must refuse the evasion the failure state exists to prevent,
         // and say so in the platform's own words rather than by omission.
@@ -173,7 +173,7 @@ class CampaignOperationsPageTest extends CampaignTestCase
         $user = $this->signedInTenant();
 
         $failed = $this->sendingCampaign($user, 2);
-        $this->transport->answering(DeliveryOutcome::ConnectionFailed);
+        $this->transport->answering(DeliveryOutcome::AuthenticationRejected, '535', 'Authentication credentials invalid');
         $this->sendOne($failed);
 
         $paused = $this->sendingCampaign($user, 2);
@@ -551,7 +551,7 @@ class CampaignOperationsPageTest extends CampaignTestCase
         $this->sendUntilEmpty($completed);
 
         $failed = $this->sendingCampaign($user, 2);
-        $this->transport->answering(DeliveryOutcome::ConnectionFailed);
+        $this->transport->answering(DeliveryOutcome::AuthenticationRejected, '535', 'Authentication credentials invalid');
         $this->sendOne($failed);
 
         $expectations = [

@@ -826,6 +826,62 @@ the status filter are read once, with an option disabled when it would return
 nothing, because a dropdown offering "Failed (0)" invites a click that produces an
 empty table and the suspicion of a bug.
 
+### Submission is not exactly-once, and the outcome model now admits it
+
+The Stage 5D audit found the most consequential defect the campaign engine had, and
+it was in the most trusted code in the product.
+
+**An exception with no SMTP status code was classified as a temporary failure.** That
+reads like the cautious choice and is the opposite. It covered DNS, the socket, TLS, a
+timeout — and a connection that died after the server had accepted `DATA` and before
+the final `250` reached PHP. Nothing in the exception distinguishes those, because the
+phase that mattered is not carried out of it.
+
+So the platform was resending, on a timer, messages that a provider might already be
+holding. Both available answers were lies in opposite directions: "accepted" claims a
+receipt nobody received, and "retry me" turns one lost acknowledgement into two delivered
+messages, with the platform as the cause and no record that it happened.
+
+There is now a fourth outcome — `ambiguous` — and it is the only one that is not
+obvious. It means the exchange ended with the server saying nothing, and it is neither
+success nor refusal. `DeliveryOutcome::Ambiguous` and `AttemptResult::Ambiguous` carry
+it, and `CampaignRecipientStatus::Unknown` records it: a seventh recipient state, because
+the existing six could not express it. `failed` would claim the server refused the
+message when it may have accepted it, and a customer told "failed" reasonably re-sends,
+which is exactly the harm being prevented.
+
+**`ambiguous` is not retryable, and that is the whole point.** The retry policy has no
+answer for it at all — `RetryPolicy::delayFor()` returns null — so the decision to send
+again belongs to a person reading the campaign. An operator who knows the first attempt
+did not land can start a new one; the platform cannot know that, so it does not assume.
+
+**The streak limit stops a broken transport doing this to an audience.** Since these
+messages are never retried, nothing else would bound them, and a dead host would walk
+the entire list leaving every recipient unconfirmed: a campaign that reached nobody and
+reported itself finished, with an unaccounted message in a queue for each. Three of the
+most recent submissions coming back with no result stops the campaign, and the reason it
+records says what is unproven rather than merely that something went wrong.
+
+Two further findings from the same audit, both now fixed:
+
+- **`SmtpMessageTransport::submit()` did not compile.** The mail-building closure both
+  declared a parameter and imported a variable of the same name, which is a fatal error
+  in PHP. Nothing had caught it because every campaign test substitutes a recording
+  transport, so the class was never loaded — the real submission path had never been
+  executed by anything. A campaign sent through a real SMTP account would have fataled
+  on the first message.
+- **The failure classifier had no tests at all**, for the same reason. It is now
+  `SmtpFailureClassifier`, a class of its own, because the decision that determines
+  whether a message is sent again belongs somewhere it can be asserted about directly.
+
+**Known limitation, carried into Stage 5D rather than fixed here.** The `Message-ID` is
+generated per *submission attempt*, so a retried message carries a different identifier
+from the one that failed. Feedback correlation is built on `Message-ID`, so a bounce
+arriving against the first attempt would correlate to nothing once a second had been
+sent. Making the identifier stable per logical message — per recipient, not per attempt —
+is the right fix, and it belongs with the correlation code that consumes it rather than
+being changed underneath this stage.
+
 ### An operator sees the same facts, and has less authority than the owner
 
 Stage 5D replaces the staged `/admin/campaigns` shell with an operations area, and

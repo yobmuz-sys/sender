@@ -33,10 +33,18 @@ use Throwable;
  *    the template has one.
  *
  * Failures are classified here and nowhere else, from the server's own reply.
+ *
+ * The classification refuses to guess in one direction on purpose. An exception
+ * with no SMTP status code is reported as {@see DeliveryOutcome::Ambiguous}
+ * rather than as a temporary failure, because the two are indistinguishable at
+ * the exception and only one of them is safe to act on automatically.
  */
 class SmtpMessageTransport implements MessageTransport
 {
-    public function __construct(private readonly MailTransportFactory $mailers) {}
+    public function __construct(
+        private readonly MailTransportFactory $mailers,
+        private readonly SmtpFailureClassifier $classifier,
+    ) {}
 
     public function submit(
         SmtpTransportDefinition $transport,
@@ -64,33 +72,47 @@ class SmtpMessageTransport implements MessageTransport
         $text = $message->text ?? '';
 
         try {
-            $accepted = $built->mailer()->raw($text, function ($message) use (
+            /*
+             * Two different messages, and the difference has to be explicit.
+             *
+             * `$content` is the `CampaignMessage` this campaign froze at launch —
+             * its subject and bodies are what must go on the wire. `$mail` is the
+             * message Symfony is building, handed to the closure. They cannot share
+             * a name: a closure may not both declare a parameter and import the same
+             * variable, so the original version of this line was a fatal error at
+             * compile time. It went unnoticed because every campaign test substitutes
+             * a recording transport, and the error only appears when this class is
+             * loaded — which, in a test suite, it was not.
+             */
+            $content = $message;
+
+            $accepted = $built->mailer()->raw($text, function ($mail) use (
                 $recipient,
                 $from,
-                $message,
+                $content,
                 $unsubscribeUrl,
                 $messageId,
             ): void {
-                $message->to($recipient)
+                $mail->to($recipient)
                     ->from($from)
-                    ->subject($message->subject)
+                    ->subject($content->subject)
                     ->messageId($messageId);
 
-                if ($message->html !== null) {
-                    $message->html($message->html);
+                if ($content->html !== null) {
+                    $mail->html($content->html);
                 }
 
-                if ($message->text !== null) {
-                    $message->text($message->text);
+                if ($content->text !== null) {
+                    $mail->text($content->text);
                 }
 
-                $message->headers->addTextHeader('List-Unsubscribe', '<'.$unsubscribeUrl.'>');
-                $message->headers->addTextHeader('List-Unsubscribe-Post', 'List-Unsubscribe=One-Click');
+                $mail->headers->addTextHeader('List-Unsubscribe', '<'.$unsubscribeUrl.'>');
+                $mail->headers->addTextHeader('List-Unsubscribe-Post', 'List-Unsubscribe=One-Click');
 
                 // Both, because neither alone is sufficient and adding a header is
                 // not deceptive: they say the same thing in the two formats
                 // clients and providers each read.
-                $message->headers->addTextHeader('Auto-Submitted', 'auto-generated');
+                $mail->headers->addTextHeader('Auto-Submitted', 'auto-generated');
             });
         } catch (Throwable $exception) {
             return $this->classify($exception, $messageId);
@@ -111,60 +133,17 @@ class SmtpMessageTransport implements MessageTransport
     /**
      * Read a server's refusal and decide what kind of problem it is.
      *
-     * The distinction that carries the weight is recipient versus transport. A
-     * `5.1.1` is one address being refused and the rest of the list is fine; a
-     * `535` is the platform's credentials being refused and every subsequent
-     * message would fail the same way. Treating them alike is how a sender ends up
-     * marking a thousand recipients failed because one provider rejected a login.
-     *
-     * Matching on the message text is a compromise — Symfony raises one transport
-     * exception for both a refused login and an unreachable host, and separating
-     * them properly would mean reimplementing the handshake. The alternative is
-     * reporting every failure as "could not connect", which is wrong for the most
-     * common misconfiguration there is.
+     * Delegated rather than inlined, because this is the decision that decides
+     * whether a message is sent again and until the ambiguous-outcome audit it was
+     * never compiled by a single test: every campaign test substitutes a recording
+     * transport. {@see SmtpFailureClassifier} holds the reasoning.
      */
     private function classify(Throwable $exception, string $messageId): TransportResult
     {
         $text = $exception->getMessage();
-        $code = $this->smtpCode($text);
+        $classified = $this->classifier->classify($text);
 
-        if (preg_match('/authenticat|\b535\b|\b5\.7\.\d+\b|credential/i', $text) === 1) {
-            return TransportResult::failed(DeliveryOutcome::AuthenticationRejected, $messageId, $code, $text);
-        }
-
-        if ($code !== null && $code >= 500 && $code < 600) {
-            // 5.1.x is the enhanced status code for "this mailbox does not exist",
-            // which is a fact about the recipient rather than about the message.
-            $isRecipient = preg_match('/\b5\.1\.\d\b/', $text) === 1
-                || preg_match('/user unknown|no such user|does not exist|mailbox unavailable/i', $text) === 1;
-
-            return TransportResult::failed(
-                $isRecipient ? DeliveryOutcome::RecipientRejected : DeliveryOutcome::PermanentFailure,
-                $messageId,
-                $code,
-                $text,
-            );
-        }
-
-        if ($code !== null && $code >= 400 && $code < 500) {
-            return TransportResult::failed(DeliveryOutcome::TemporaryFailure, $messageId, $code, $text);
-        }
-
-        // No code at all means the exchange never got far enough to produce one:
-        // DNS, the socket, TLS, or a timeout. The server told us nothing, which is
-        // a reason to come back later rather than to give up on the recipient.
-        return TransportResult::failed(DeliveryOutcome::TemporaryFailure, $messageId, null, $text);
-    }
-
-    /**
-     * The SMTP status code in a server's reply, if there is one.
-     *
-     * Matched as three digits that stand alone, so a queue id or a remote address
-     * containing digits is not mistaken for a code.
-     */
-    private function smtpCode(string $text): ?string
-    {
-        return preg_match('/\b([45]\d{2})\b/', $text, $matches) === 1 ? $matches[1] : null;
+        return TransportResult::failed($classified['outcome'], $messageId, $classified['code'], $text);
     }
 
     /**

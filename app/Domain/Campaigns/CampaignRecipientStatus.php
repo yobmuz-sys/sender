@@ -45,6 +45,24 @@ enum CampaignRecipientStatus: string
 
     case Blocked = 'blocked';
 
+    /**
+     * Submitted, and the platform never learned what the server said.
+     *
+     * The seventh state, added because the six above could not express it honestly.
+     * `sent` would claim a receipt nobody received, and `failed` would claim the
+     * server refused the message when in fact the server may have accepted it and
+     * lost the reply on the way back. Both readings would be wrong, and the second
+     * one is the dangerous one: a customer told "failed" reasonably re-sends, which
+     * is how one message becomes two.
+     *
+     * Terminal on purpose. The platform cannot retry this one safely, so the decision
+     * to send again belongs to a person reading the campaign, not to a policy
+     * running unattended. What a recipient in this state contributes to a campaign's
+     * progress is nothing outstanding — it has been dealt with — while contributing
+     * nothing to the sent count either.
+     */
+    case Unknown = 'unknown';
+
     public function label(): string
     {
         return match ($this) {
@@ -54,6 +72,7 @@ enum CampaignRecipientStatus: string
             self::Failed => 'Failed',
             self::Skipped => 'Skipped',
             self::Blocked => 'Blocked',
+            self::Unknown => 'No reply',
         };
     }
 
@@ -66,6 +85,7 @@ enum CampaignRecipientStatus: string
             self::Failed => 'rose',
             self::Skipped => 'slate',
             self::Blocked => 'slate',
+            self::Unknown => 'amber',
         };
     }
 
@@ -78,7 +98,7 @@ enum CampaignRecipientStatus: string
      */
     public function isTerminal(): bool
     {
-        return in_array($this, [self::Sent, self::Failed, self::Skipped, self::Blocked], true);
+        return in_array($this, [self::Sent, self::Failed, self::Skipped, self::Blocked, self::Unknown], true);
     }
 
     /**
@@ -117,6 +137,7 @@ enum CampaignRecipientStatus: string
             self::Failed => 'This message will not be retried. See the reason beside it.',
             self::Skipped => 'There was nobody to send to: the contact was deleted before this turn came up. No server was contacted.',
             self::Blocked => 'The platform refused before contacting any server, because this person had asked not to be contacted.',
+            self::Unknown => 'This message was submitted and no reply came back, so whether the server took it is unknown. It is not being sent again automatically, because if the first attempt did land, sending it again would deliver it twice.',
         };
     }
 }

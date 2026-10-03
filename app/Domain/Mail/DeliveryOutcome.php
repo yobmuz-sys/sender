@@ -49,6 +49,32 @@ enum DeliveryOutcome: string
 
     /**
      * The connection failed before a reply was read.
+     *
+     * A transport may report this rather than the application working it out, and
+     * the two are the same fact: nothing was heard back. See {@see self::Ambiguous}
+     * for why that fact is not a licence to send again.
      */
     case ConnectionFailed = 'connection_failed';
+
+    /**
+     * No reply was read, so the platform cannot say what happened.
+     *
+     * The fourth outcome, and the one this vocabulary was missing. SMTP submission
+     * is not exactly-once from the application's side of the wire: a server can
+     * accept a message and the connection can fail before PHP reads the `250`, and
+     * then the platform holds a message that was delivered and no reply to prove
+     * it. Anything that went wrong without producing a status code — DNS, the
+     * socket, TLS, a timeout, a connection dropped mid-exchange — is reported here
+     * rather than being filed as a temporary failure.
+     *
+     * The distinction matters because the two demand opposite behaviour. A `4xx`
+     * is the server asking to be left alone for a while, and answering it with the
+     * same message later is correct. An ambiguous outcome may already have been
+     * accepted, so answering it with the same message later may deliver it twice.
+     *
+     * Nothing here knows whether the message was submitted before the failure. That
+     * information does not survive the exception, so this outcome declines to
+     * guess in either direction: not accepted, and not safe to resend.
+     */
+    case Ambiguous = 'ambiguous';
 }
