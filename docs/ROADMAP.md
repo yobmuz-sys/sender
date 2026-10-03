@@ -7,8 +7,26 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
-> **Stage 5C — campaign engine, in progress**
-> Stage 5C has delivered **templates** and the **campaign domain**: a campaign
+> **Stage 5D — bounce and complaint feedback, next**
+> Everything downstream of the campaign engine is waiting on evidence the platform
+> does not yet have. A submitted message is not a delivered one, and this platform
+> has never claimed otherwise: the campaign pages say "accepted by SMTP server" and
+> never "delivered". What is missing is the other half of that sentence — what
+> subsequently happened at the receiving end. Stage 5D builds normalized delivery
+> feedback: provider adapters that translate one relay's payload into one internal
+> event contract, idempotent ingestion, correlation to a recipient and campaign only
+> where the evidence supports it, and integration with the suppression model that
+> already exists and is already terminal for complaints. Analytics comes *after*
+> this, built from those rows rather than beside them.
+>
+> The stage begins with an audit rather than an adapter, and the audit comes first
+> because submission is not exactly-once: a provider can accept a message and the
+> connection can fail before PHP sees the final response. An outcome the application
+> cannot establish has to be recorded as such and must not become an automatic
+> retry, or the platform manufactures duplicate mail.
+>
+> **Stage 5C — campaign engine, complete**
+> Stage 5C delivered **templates** and the **campaign domain**: a campaign
 > copies its message and its audience at launch and reads neither again, so a
 > template edited afterwards cannot change what is already going out. Preflight
 > answers PASS/WARN/BLOCK/UNKNOWN from one service the builder, the campaign page
@@ -18,8 +36,15 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 > cannot send the same message. Pacing is a minimum interval enforced from a
 > timestamp, and the pages say plainly that the hosting scheduler decides when the
 > worker runs. A transport that stops working stops its campaign; it is never
-> quietly switched to another account. Bounce and complaint ingestion and
-> analytics are next, on the delivery records this stage leaves behind.
+> quietly switched to another account.
+>
+> Both surfaces are real. A customer watches their own campaigns and controls them,
+> with a delivery page that explains why a campaign stopped and a recipient log with
+> its attempt history. An administrator watches every campaign across every tenant,
+> sees incidents above the table rather than behind a filter, and can pause, resume
+> or cancel — through the same domain rules the customer's own buttons call, with no
+> ability to launch, edit or re-transport somebody's campaign.
+>
 >
 > **Stage 5B — recipient validation and audience controls**
 > Addresses an extraction finds are checked, not merely collected. A four-stage
@@ -64,21 +89,25 @@ Stage 5B complete with templates landed as the first Stage 5C feature, plus a
 two-control recipient probing switch. 753 tests / 2704 assertions passing.
 Previous accepted baseline: `70b380a`.
 
-## The next objective: sending
+## The next objective: what happened to the mail
 
-The audience layer now exists, so the binding constraint is no longer whether the
-platform can find an address or decide whether to trust it. It is what happens
-between the audience and a mail server.
+The sending engine now exists end to end, so the binding constraint is no longer
+whether the platform can find an address or put a message on the wire. It is what
+the receiving side reported afterwards — bounces, complaints, and the honest cases
+where the platform cannot tell.
 
 ```text
 5A  SMTP transport + per-user/admin assignment + deliverability preflight   DONE
       ↓
 5B  Sender identity, recipients, lists, consent, suppression, unsubscribe   DONE
       ↓
-5C  Campaign engine, bounded queue, rate control, preflight, delivery state   ACTIVE
-      Templates DONE; campaign domain NEXT
+5C  Campaign engine, bounded queue, rate control, preflight, delivery state   DONE
+      Templates, campaign domain, worker, customer UI, admin UI
       ↓
-5D  Bounce and complaint feedback, provider adapters, sending analytics
+5D  Bounce and complaint feedback, provider adapters, observed outcomes      NEXT
+      Begins with an audit of ambiguous submission outcomes
+      ↓
+     Analytics — built from the feedback rows, not beside them
       ↓
 4F  Remaining extraction formats (upload, XLSX, DOCX, PDF, XML)
       ↓
@@ -115,7 +144,7 @@ diagnostics page (Stage 3B adds the full administrative surface).
 | 2 | Capability, availability and deployment control foundation | complete |
 | 3 | Job and cron processing engine | 3A and 3B complete; engine not started |
 | 4 | Email extraction engine | pending |
-| 5 | SMTP campaign engine | 5A and 5B complete; 5C begun (templates, campaign domain, preflight, durable audience, worker) |
+| 5 | SMTP campaign engine | 5A, 5B and 5C complete (templates, campaign domain, preflight, durable audience, worker, customer campaign pages, admin campaign area); 5D next |
 | 6 | Admin operations centre | 3B foundation in place; operational workloads pending |
 | 7 | REST API and PHP integration | pending |
 | 8 | Billing | pending |
