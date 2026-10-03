@@ -9,7 +9,11 @@ use App\Domain\Campaigns\Campaign;
 use App\Domain\Campaigns\CampaignIndex;
 use App\Domain\Campaigns\CampaignIndexFilters;
 use App\Domain\Campaigns\CampaignLauncher;
+use App\Domain\Campaigns\CampaignOperations;
 use App\Domain\Campaigns\CampaignPreflight;
+use App\Domain\Campaigns\CampaignRecipientLog;
+use App\Domain\Campaigns\CampaignRecipientLogFilters;
+use App\Domain\Campaigns\CampaignRecipientStatus;
 use App\Domain\Campaigns\CampaignStatus;
 use App\Domain\Campaigns\CampaignSummary;
 use App\Domain\Mail\SmtpAccount;
@@ -47,11 +51,6 @@ use Illuminate\View\View;
  */
 class CampaignController extends Controller
 {
-    /**
-     * Recipients listed on the campaign page per page.
-     */
-    private const RECIPIENTS_PER_PAGE = 50;
-
     /**
      * The campaign list.
      *
@@ -177,36 +176,54 @@ class CampaignController extends Controller
         return $this->startCampaign($campaign);
     }
 
-    public function show(Request $request, CampaignPreflight $preflight, mixed $campaign = null): View
-    {
+    /**
+     * The campaign operations page.
+     *
+     * Answers the seven questions a customer has about a send — what, who, through
+     * what account, what state, how many, what happened, what now — and every answer
+     * comes from a read model rather than from this method. It counts nothing itself
+     * and decides nothing itself, because both of those belong to types that already
+     * own them: {@see CampaignSummary} for progress and actions,
+     * {@see CampaignOperations} for the snapshot and what the worker has done, and
+     * {@see CampaignRecipientLog} for a page of recipients.
+     *
+     * Ownership is resolved before any of it runs, so a campaign belonging to
+     * another tenant is a 404 rather than a page that queried its recipients.
+     */
+    public function show(
+        Request $request,
+        CampaignPreflight $preflight,
+        CampaignRecipientLog $log,
+        mixed $campaign = null,
+    ): View {
         $record = $this->owned($request, $campaign);
 
         $counts = $record->recipientCounts();
 
+        // The same read model the list builds, from the counts this page has
+        // already fetched, so the action buttons here and in the list are decided
+        // by one piece of code.
+        $summary = CampaignSummary::of($record, $counts);
+        $filters = CampaignRecipientLogFilters::fromRequest($request);
+
         return view('campaigns.show', [
             'campaign' => $record,
             'preflight' => $preflight,
-
-            // The same read model the list builds, from the counts this page has
-            // already fetched, so the action buttons here and in the list are
-            // decided by one piece of code.
-            'summary' => CampaignSummary::of($record, $counts),
+            'summary' => $summary,
+            'operations' => CampaignOperations::read($record, $summary),
 
             // Answered whatever the state, not only once launched. A draft's
             // blockers are the most useful thing on the page — they are why the
             // start button is unavailable — and a launched campaign's are shown
             // again so it is obvious that later changes to a template or a
-            // transport do not alter what is already going out.
+            // transport do not alter what this campaign is already sending.
             'report' => $preflight->reportFor($record),
+
             'counts' => $counts,
-            'recipients' => $record->recipients()
-                ->with('contact')
-                ->orderBy('id')
-                ->paginate(self::RECIPIENTS_PER_PAGE),
-            'lastFailure' => $record->recipients()
-                ->whereNotNull('last_attempt_at')
-                ->orderByDesc('last_attempt_at')
-                ->first(),
+            'recipientFilters' => $filters,
+            'recipients' => $log->paginateFor($record, $filters),
+            'recipientStatuses' => CampaignRecipientStatus::cases(),
+            'recipientStatusCounts' => $log->statusCountsFor($record),
         ]);
     }
 

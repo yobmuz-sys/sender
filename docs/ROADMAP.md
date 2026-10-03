@@ -744,6 +744,59 @@ either a real value or absent, so a hand-edited URL cannot produce a page that
 silently matches nothing. Date filtering, and any notion of bounce or open
 analytics, wait for the data those features would need.
 
+### The campaign page is an operations screen
+
+The list answers *which* campaigns exist; this one answers *what is happening to
+this one*. It is the page a customer opens when they need to know whether to act,
+so its structure is decided by that question rather than by the shape of the data:
+
+- **The first viewport is state.** Badge, one sentence of plain figures, the action
+  that is legal now. The template, the list and the transport are what a campaign is
+  *about*; none of it may sit above the answer to "is this sending, and how far".
+- **Every figure comes from the same read model the list uses.** The progress bar,
+  the six status counts, the headline and the "still to send" figure are
+  `CampaignProgress` read four ways, so a percentage on this page and on a row of
+  the list cannot disagree.
+- **The snapshot section says "frozen" rather than "selected",** and its template
+  name is a copied column rather than the live relation. That is not tidiness: the
+  `template_id` reference is `nullOnDelete`, so a deleted template would otherwise
+  leave a year-old campaign unable to say what it sent.
+- **Stored server text is scrubbed on the way out, not on the way in.** The attempt
+  history keeps a server's reply verbatim because that is the only evidence a
+  future bounce can be matched against; printing it on a page that gets left open
+  is a separate act, and it goes through `SensitiveData::redactText()`. The secret
+  is never printed at all, and neither is the account's username — the From
+  identity is, because recipients see it.
+- **Worker visibility is state, not a live feed.** "Next send may happen at 14:32"
+  is the pace clock the worker reads and is labelled a floor rather than a promise;
+  "a worker is processing this right now" is a live claim; "nothing is waiting on a
+  timer" is what a settled campaign looks like. There is no countdown and no
+  polling, because a countdown would have to be computed from state that does not
+  yet exist.
+
+Two things it deliberately does not have:
+
+**No event log.** The timeline is built from the timestamps a campaign already keeps
+plus the attempt history, which is a real log. Individual pause and resume cycles
+are therefore not recorded, and the page says so rather than inventing a history
+that reads like evidence. An event table written only to draw this list would be a
+table with no other purpose.
+
+**No advice that evades a provider.** `CampaignInterruption` explains a pause as a
+decision that can be undone and a transport failure as one that cannot, quotes the
+reason recorded when the campaign stopped, and tells a customer to fix the account
+and start a new campaign. It never suggests another account, because that is the
+exact failure `CampaignStatus::Failed` exists to prevent — and advice on this page
+would undo it in the one place a customer is reading.
+
+The recipient log is paged on the server at fifty a row, ordered with unsettled work
+first, and filtered by address and by status; each row can open its attempt history.
+A campaign that has run has as many rows here as it had recipients, so the page's
+size is bounded by the page size rather than by the audience — and the counts in
+the status filter are read once, with an option disabled when it would return
+nothing, because a dropdown offering "Failed (0)" invites a click that produces an
+empty table and the suspicion of a bug.
+
 ### A campaign is a frozen sending job
 
 The invariant the whole stage is arranged around:

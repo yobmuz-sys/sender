@@ -90,4 +90,24 @@ enum AttemptResult: string
             self::Blocked, self::Skipped => 'slate',
         };
     }
+
+    /**
+     * What this outcome means, in one sentence a customer can act on.
+     *
+     * The label says what happened; this says what it means for that recipient. The
+     * distinction matters for the three outcomes a customer will want explained:
+     * "temporary failure" without a reason reads as a bug, and "the server asked us
+     * to come back later" is what tells them their volume was too high.
+     */
+    public function explanation(): string
+    {
+        return match ($this) {
+            self::Accepted => 'The receiving server took responsibility for this message. That is not a promise it arrived, and nothing here can tell you whether it was opened.',
+            self::TemporaryFailure => 'The server asked us to try again later, which usually means it wanted less mail for a while. This recipient is queued for another attempt.',
+            self::PermanentFailure => 'The server refused this message and will not accept it again, so it is not retried.',
+            self::TransportFailure => 'The connection or the sending account itself failed. Nothing about this recipient caused it.',
+            self::Blocked => 'The platform refused before contacting any server: this person had asked not to be contacted before their turn came up.',
+            self::Skipped => 'There was nobody to send to. No server was contacted and no decision was made.',
+        };
+    }
 }

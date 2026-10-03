@@ -56,7 +56,17 @@ class CampaignRecipient extends Model
         return $this->belongsTo(Contact::class);
     }
 
-    public function attempts(): HasMany
+    /**
+     * Every attempt made for this recipient, oldest first.
+     *
+     * Named `deliveryAttempts()` rather than `attempts()` because the row has an
+     * `attempts` column: Eloquent resolves a property access to the attribute
+     * before the relation, so `$recipient->attempts` is the counter and a relation
+     * of the same name could only ever be reached through its method — which reads
+     * as a relation and returns an integer, and fails a page rather than a test
+     * that happened to notice.
+     */
+    public function deliveryAttempts(): HasMany
     {
         return $this->hasMany(DeliveryAttempt::class);
     }

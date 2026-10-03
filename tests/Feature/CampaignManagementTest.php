@@ -829,17 +829,26 @@ class CampaignManagementTest extends CampaignTestCase
         $list = $this->listFor($user);
         $this->eligibleContact($user, $list);
 
-        $campaign = $this->draftFor($user, ['list_id' => $list->id, 'name' => 'October update']);
+        $template = $this->readyTemplateFor($user, ['subject' => 'October updates for your account']);
+
+        $campaign = $this->draftFor($user, [
+            'list_id' => $list->id,
+            'template_id' => $template->id,
+            'name' => 'October update',
+        ]);
+
         app(CampaignLauncher::class)->launchNow($campaign);
 
         $this->actingAs($user)
             ->get(route('campaigns.show', $campaign))
             ->assertOk()
             ->assertSee('October update')
-            ->assertSee('Frozen at template version 1')
-            ->assertSee('Minimum send interval')
+            ->assertSee('at version 1')
+            ->assertSee('October updates for your account')
+            ->assertSee('Campaign snapshot')
+            ->assertSee('At most one message every')
             ->assertSee('Recipients')
-            ->assertSee('skipped or blocked');
+            ->assertSee('Skipped means there was nobody to send to');
     }
 
     public function test_a_failed_transport_stops_the_campaign_rather_than_switching_to_another(): void

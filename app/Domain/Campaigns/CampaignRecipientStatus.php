@@ -98,4 +98,25 @@ enum CampaignRecipientStatus: string
     {
         return in_array($this, [self::Queued, self::Sending], true);
     }
+
+    /**
+     * What this state means for this person, in one sentence.
+     *
+     * The label says where the recipient stands; this says why, which is the
+     * question the recipient log raises. `failed` in particular needs its reasons
+     * separated — "the server refused this address" and "the transport broke" are
+     * different problems with different remedies, and a single word cannot say
+     * which one happened. The stored reason beside it has the specifics.
+     */
+    public function explanation(): string
+    {
+        return match ($this) {
+            self::Queued => 'Waiting to be sent. Nothing has been submitted for this address yet.',
+            self::Sending => 'A worker has claimed this recipient and is submitting it right now.',
+            self::Sent => 'A receiving server accepted this message. That is not a promise it arrived in an inbox.',
+            self::Failed => 'This message will not be retried. See the reason beside it.',
+            self::Skipped => 'There was nobody to send to: the contact was deleted before this turn came up. No server was contacted.',
+            self::Blocked => 'The platform refused before contacting any server, because this person had asked not to be contacted.',
+        };
+    }
 }

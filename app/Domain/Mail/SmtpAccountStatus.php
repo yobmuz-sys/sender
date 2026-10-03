@@ -93,6 +93,25 @@ enum SmtpAccountStatus: string
     }
 
     /**
+     * The readiness vocabulary this state is reported in.
+     *
+     * The same words the account pages and the delivery report use, defined once
+     * here rather than as a map in each view that shows an account — a status that
+     * read READY on the account page and READY again somewhere else by accident is
+     * fine, and one that reads differently because two maps drifted is not.
+     */
+    public function tone(): string
+    {
+        return match ($this) {
+            self::Ready => 'READY',
+            self::Stale => 'DEGRADED',
+            self::Failed => 'failed',
+            self::Disabled => 'suspended',
+            self::Unverified => 'pending',
+        };
+    }
+
+    /**
      * What this state means for a send, in one sentence.
      *
      * Lives here rather than in a view because three different screens now report

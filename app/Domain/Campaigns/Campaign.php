@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -41,6 +42,8 @@ use Illuminate\Support\Facades\DB;
  * @property CampaignStatus $status
  * @property CarbonImmutable|null $scheduled_at
  * @property string|null $scheduled_timezone
+ * @property int|null $template_version
+ * @property string|null $template_name_snapshot
  * @property int $rate_interval_seconds
  * @property int $worker_batch_size
  */
@@ -138,6 +141,27 @@ class Campaign extends Model
         return $this->hasMany(CampaignRecipient::class);
     }
 
+    /**
+     * Every submission attempt made for this campaign, across all its recipients.
+     *
+     * A convenience relation rather than a second place to query: the attempts
+     * belong to recipients, and an operations page wants the first and last of them
+     * and the most recent refusal without walking the recipient table in PHP.
+     *
+     * It is for aggregate questions only. A page showing attempt history shows it
+     * per recipient, through {@see CampaignRecipient::attempts()}, because that is
+     * where the meaning of an attempt number lives.
+     */
+    public function attempts(): HasManyThrough
+    {
+        return $this->hasManyThrough(
+            DeliveryAttempt::class,
+            CampaignRecipient::class,
+            'campaign_id',
+            'campaign_recipient_id',
+        );
+    }
+
     public function scopeOwnedBy(Builder $query, int $userId): Builder
     {
         return $query->where('user_id', $userId);
@@ -171,6 +195,7 @@ class Campaign extends Model
     public function freeze(array $snapshot): void
     {
         $this->template_version = $snapshot['version'];
+        $this->template_name_snapshot = $snapshot['name'];
         $this->subject_snapshot = $snapshot['subject'];
         $this->preheader_snapshot = $snapshot['preheader'];
         $this->html_body_snapshot = $snapshot['html_body'];

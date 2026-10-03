@@ -705,8 +705,9 @@ a confirmed address.
 | `/account/deliverability` | Sending health and readiness findings |
 | `/templates`, `/templates/new`, `/templates/{template}`, `/{template}/edit` | Message templates: reusable content, versioned, with a sandboxed preview |
 | `/campaigns` | Campaign list: state counts, filters, progress counted from recipient rows |
-| `/campaigns/new`, `/campaigns/{campaign}`, `/{campaign}/edit` | Prepare a campaign: template, audience, transport, pace, checks |
-| `/campaigns/{campaign}/start`, `/send-now`, `/pause`, `/resume`, `/cancel` | State changes, all POST. Cancelling is confirmed on its own page first |
+| `/campaigns/{campaign}` | Operations: status first, then the frozen snapshot, what the worker has done, why it stopped, and a filtered recipient log with attempt history |
+| `/campaigns/new`, `/{campaign}/edit` | Prepare a campaign: template, audience, transport, pace, checks |
+| `/campaigns/{campaign}/start`, `/send-now`, `/pause`, `/resume`, `/cancel` | State changes, all POST. Each re-validates the campaign's state server-side and answers 409 if it has moved; cancelling is confirmed on its own page first |
 | `/files`, `/analytics` | Product surfaces — staged shells, see the limitation above |
 
 ### Administration

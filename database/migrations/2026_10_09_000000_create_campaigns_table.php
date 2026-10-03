@@ -70,8 +70,14 @@ return new class extends Migration
              * Nullable because a draft has not copied anything yet; every
              * launched campaign has all of it, which the launch code asserts
              * before it will change the status.
+             *
+             * The template's *name* is copied as well as its content. A campaign
+             * page has to be able to say which template this was years later, and
+             * `template_id` is a live reference with `nullOnDelete` — a deleted
+             * template would leave a sent campaign unable to name itself.
              */
             $table->unsignedInteger('template_version')->nullable();
+            $table->string('template_name_snapshot')->nullable();
             $table->string('subject_snapshot')->nullable();
             $table->string('preheader_snapshot')->nullable();
             $table->longText('html_body_snapshot')->nullable();
