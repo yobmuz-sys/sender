@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace App\Domain\System\Services;
 
+use App\Domain\Audience\SmtpProbingPolicy;
 use App\Domain\System\CapabilityCheck;
 use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Enums\CapabilitySubject;
 use App\Domain\System\Enums\DeploymentLimit;
+use App\Domain\System\Enums\Subsystem;
+use App\Domain\System\Flags\SubsystemFlagRegistry;
 use App\Domain\System\HostCapabilityReport;
 use App\Domain\System\HostEnvironment;
 use App\Support\Bytes;
@@ -319,23 +322,35 @@ final class HostCapabilityInspector implements HostInspector
      * third parties. It reports the configuration and tells the operator how to
      * find out what the host permits.
      *
+     * There are now two controls behind that answer — the environment ceiling and
+     * the operator's switch at `/admin/system/subsystems` — so the check
+     * distinguishes "off by configuration" from "off by operator". An operator
+     * who switched it off during an incident and then forgot should be able to
+     * read their own decision out of the diagnostic rather than blaming the host.
+     *
      * Untagged, for the same reason as the transactional mailer check: a
      * configuration switch is not a measurement, and the SMTP capability remains
      * established only by `sender:verify-smtp`.
      */
     private function recipientValidationCheck(): CapabilityCheck
     {
-        $enabled = (bool) config('sender.validation.smtp_probing', false);
+        $flags = app(SubsystemFlagRegistry::class);
+        $policy = SmtpProbingPolicy::fromEnvironment($flags);
 
-        if (! $enabled) {
+        if (! $policy->enabled()) {
+            $operatorStopped = ! $policy->permittedByEnvironment()
+                && ! $flags->enabled(Subsystem::SmtpValidation);
+
             return CapabilityCheck::degraded(
                 'recipient validation probing',
-                'off',
+                $operatorStopped ? 'off by operator' : 'off by configuration',
                 [
                     'Addresses will be reported as UNKNOWN with the reason "verification blocked".',
                     'That is the honest answer: the platform is not allowed to ask a mail server whether a mailbox exists.',
                     'It never reports them as inactive, and it never reports them as active either.',
-                    'To turn it on, ask your host whether outbound port 25 is permitted, then set SENDER_VALIDATION_SMTP_PROBING=true.',
+                    $operatorStopped
+                        ? 'An operator has switched it off at /admin/system/subsystems; re-enable it there.'
+                        : 'To turn it on, ask your host whether outbound port 25 is permitted, then set SENDER_VALIDATION_SMTP_PROBING=true and enable the switch at /admin/system/subsystems.',
                 ],
             );
         }

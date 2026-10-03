@@ -21,10 +21,14 @@ long-running daemons and root access are **not** required at any point.
 > effect immediately and is idempotent. SMTP probing is **off by default**,
 > because shared hosting usually blocks outbound port 25; with it off, validation
 > honestly reports `UNKNOWN — verification blocked` and never invents a verdict.
-> Campaign sending remains future work.
+> Probing is governed by two controls that compose as an AND — the
+> `SENDER_VALIDATION_SMTP_PROBING` deployment ceiling and an operator switch at
+> `/admin/system/subsystems` — so an operator can stop it without a deploy but
+> cannot raise a ceiling the deployment has set. Campaign sending remains future
+> work.
 
-Stage 5B complete. 638 tests / 2037 assertions passing. Previous accepted
-baseline: `70b380a`.
+Stage 5B complete, plus a two-control recipient probing switch. 711 tests /
+2588 assertions passing. Previous accepted baseline: `70b380a`.
 
 Implemented and tested:
 
@@ -44,6 +48,7 @@ Implemented and tested:
 | Deployment limits, kept distinct from host requirements | done |
 | Deny-by-default entitlement seam | done |
 | Operator subsystem kill switches | done |
+| Recipient probing under a deployment ceiling and an operator switch | done |
 | Queue reservation invariant (`retry_after` vs worker runtime) | done |
 | Durable scheduled-run evidence, replacing the cache heartbeat | done |
 | SMTP verification and the capability it establishes | done |

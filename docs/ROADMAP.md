@@ -7,6 +7,13 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 
 ## Position
 
+> **Stage 5C — campaign engine, in progress**
+> Stage 5C opened with **templates**: reusable message content, tenant-scoped, with
+> a whitelisted placeholder renderer that never compiles a customer's HTML, a
+> sandboxed preview, and a version counter that means a campaign can copy content at
+> launch and keep it. The campaign domain — audience snapshot, preflight, durable
+> recipient state, rate scheduling and the resumable worker — is next.
+>
 > **Stage 5B — recipient validation and audience controls**
 > Addresses an extraction finds are checked, not merely collected. A four-stage
 > pipeline — syntax, mail route, catch-all, SMTP recipient — records what it
@@ -43,10 +50,12 @@ the code — for what actually exists, see the README and `ARCHITECTURE.md`.
 > produce a `READY` cron verdict; and a retryable extraction failure briefly
 > presented as terminal.
 
-**Stage 5A-5B complete. Addresses are validated and the audience is auditable;
-nothing sends mail yet.**
+**Stage 5B complete; Stage 5C begun. Addresses are validated and the audience is
+auditable; reusable message content exists; nothing sends mail yet.**
 
-Stage 5B complete. 638 tests / 2037 assertions passing. Previous accepted baseline: `70b380a`.
+Stage 5B complete with templates landed as the first Stage 5C feature, plus a
+two-control recipient probing switch. 753 tests / 2704 assertions passing.
+Previous accepted baseline: `70b380a`.
 
 ## The next objective: sending
 
@@ -59,7 +68,8 @@ between the audience and a mail server.
       ↓
 5B  Sender identity, recipients, lists, consent, suppression, unsubscribe   DONE
       ↓
-5C  Campaign engine, bounded queue, rate control, preflight, delivery state   NEXT
+5C  Campaign engine, bounded queue, rate control, preflight, delivery state   ACTIVE
+      Templates DONE; campaign domain NEXT
       ↓
 5D  Bounce and complaint feedback, provider adapters, sending analytics
       ↓
@@ -632,13 +642,29 @@ exist to prevent. The cost — a task whose worker is killed without `failed()`
 running blocks the account until the retry count exhausts — is bounded, recoverable
 and visible on the task's own badge.
 
-### Off by default
+### Off by default, and stoppable without a deploy
 
 `SENDER_VALIDATION_SMTP_PROBING` defaults to `false`, because shared hosting
 usually blocks outbound port 25. With probing off, syntax and DNS still run and
 everything else is `UNKNOWN` with the reason *verification blocked*. The task
 finishes, the counts are honest, and nothing is ever recorded as inactive on that
-basis. `sender:diagnose` prints the setting as `recipient validation probing`.
+basis.
+
+Probing is then governed by **two** controls composing as an AND: the deployment
+ceiling above, and an operator switch at `/admin/system/subsystems` persisted in
+`system_settings`. An operator can stop outbound port 25 mid-incident with no
+deploy, and cannot raise a ceiling the deployment has set — the platform cannot
+tell a mistake from an intention to try anyway. Entitlement is not an input: a
+safety control over the host's outbound traffic must not depend on a commercial
+decision, or an unentitled installation would have no way to switch probing off.
+`sender:diagnose` names which of the two is responsible, because an operator who
+switched it off during an incident and forgot should be able to read their own
+decision out of the diagnostic.
+
+`smtp_validation` is also the one subsystem with no capability subject, and that
+is deliberate rather than an omission: establishing whether the host permits port
+25 would mean dialling a mail server from a diagnostic command, which is the
+behaviour the flag exists to prevent. It is decided by the flag and the ceiling.
 
 ### No send button, and no accuracy percentage
 

@@ -102,7 +102,11 @@
                 @foreach ($availability as $operation => $decision)
                     <li class="flex items-center justify-between gap-3 text-sm">
                         <span class="text-slate-700">{{ \Illuminate\Support\Str::headline(str_replace('.', ' ', $operation)) }}</span>
-                        <x-status-badge :status="$decision->capability->value" />
+                        @if ($decision->capability)
+                            <x-status-badge :status="$decision->capability->value" />
+                        @else
+                            <x-status-badge status="UNKNOWN" label="Not measured" />
+                        @endif
                     </li>
                 @endforeach
             </ul>

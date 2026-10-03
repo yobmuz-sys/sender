@@ -173,6 +173,28 @@ Setting this to `true` on a host that blocks port 25 gains nothing and produces
 confusing reports. Ask your host first. Full detail is in
 [Recipient validation on shared hosting](#recipient-validation-on-shared-hosting).
 
+### The second control: the operator switch
+
+Recipient probing has **two** independent controls, and they compose as an AND:
+
+```text
+effective = SENDER_VALIDATION_SMTP_PROBING  AND  /admin/system/subsystems
+```
+
+The environment variable is the ceiling and the operator switch is the runtime
+kill switch. An operator can stop outbound port 25 during an incident without
+editing a file or reloading the application; an operator **cannot** use the switch
+to go above a ceiling the deployment has set, because the platform cannot tell a
+mistake from an intention to try anyway.
+
+To enable it, do both:
+
+1. set `SENDER_VALIDATION_SMTP_PROBING=true` and reload the application;
+2. enable **Recipient SMTP validation** at `/admin/system/subsystems`.
+
+Doing only one leaves it off, and the page says so. `sender:diagnose` reports
+which of the two is responsible: `off by configuration` or `off by operator`.
+
 ---
 
 ## 5. Migrate and verify
@@ -542,7 +564,8 @@ With it off:
 That is the honest answer rather than a degraded one: the platform is not allowed
 to ask a mail server whether a mailbox exists, and it declines to guess.
 
-`sender:diagnose` prints the current setting as `recipient validation probing`.
+`sender:diagnose` prints the current state as `recipient validation probing` and
+names which of the two controls is responsible.
 
 ### Turning it on
 
@@ -554,6 +577,9 @@ permitted:
 SENDER_VALIDATION_SMTP_PROBING=true
 SENDER_VALIDATION_SMTP_TIMEOUT_SECONDS=5
 ```
+
+Then enable **Recipient SMTP validation** at `/admin/system/subsystems`. Both are
+required.
 
 If it is not, leave the switch off. There is no partial mode: the pipeline either
 may ask or may not.
@@ -581,6 +607,7 @@ Validation asks *other people's* mail servers one question per address. On a
 shared host that is the behaviour which gets an outbound IP blocked, so:
 
 - it is off unless you deliberately turn it on;
+- the operator can switch it off from the browser, mid-incident, with no deploy;
 - one catch-all probe per domain per cache window, sent to a random address that
   cannot exist;
 - no message is ever delivered to a recipient to find out whether they exist.

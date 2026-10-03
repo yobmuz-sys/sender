@@ -39,6 +39,8 @@ class SubsystemController extends Controller
                 'enabled' => $this->flags->enabled($subsystem),
                 'default' => (bool) config('sender.subsystems.'.$subsystem->value, true),
                 'overridden' => $this->settings->get($this->key($subsystem)) !== null,
+                'subject' => $subsystem->subject(),
+                'permittedByEnvironment' => $subsystem->deploymentAllows(),
             ]),
             'canManage' => $request->user()?->can(Permission::SYSTEM_MANAGE) ?? false,
         ]);

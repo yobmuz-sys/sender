@@ -21,9 +21,14 @@
                         <h2 class="text-sm font-semibold text-slate-900">{{ $subsystem['enum']->label() }}</h2>
                         <p class="mt-1 text-sm text-slate-600">
                             <span class="font-mono text-xs">{{ $subsystem['enum']->value }}</span>
-                            &middot; depends on the
-                            <span class="font-mono text-xs">{{ $subsystem['enum']->subject()->value }}</span>
-                            capability.
+                            @if ($subsystem['subject'])
+                                &middot; depends on the
+                                <span class="font-mono text-xs">{{ $subsystem['subject']->value }}</span>
+                                capability.
+                            @else
+                                &middot; no host capability applies. Whether it can run is
+                                established by the deployment, not by a measurement.
+                            @endif
                         </p>
                         <p class="mt-2 text-xs text-slate-500">
                             Configured default:
@@ -31,6 +36,15 @@
                             Current state:
                             <strong>{{ $subsystem['overridden'] ? 'overridden' : 'not overridden' }}</strong>.
                         </p>
+
+                        @unless ($subsystem['permittedByEnvironment'])
+                            <p class="mt-2 text-xs text-amber-700">
+                                This deployment does not permit it. Enabling the switch below has no
+                                effect until the configuration is changed and the application
+                                reloaded, and it is the configuration that is refused if the host
+                                cannot do this at all.
+                            </p>
+                        @endunless
                     </div>
 
                     <div class="flex items-center gap-3">
@@ -48,7 +62,9 @@
                                 @else
                                     <form method="POST" action="{{ route('admin.system.subsystems.enable', $subsystem['enum']) }}">
                                         @csrf
-                                        <x-button type="submit" variant="primary">Enable</x-button>
+                                        <x-button type="submit" variant="primary" :disabled="! $subsystem['permittedByEnvironment']">
+                                            Enable
+                                        </x-button>
                                     </form>
                                 @endif
 

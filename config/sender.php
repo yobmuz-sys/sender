@@ -110,6 +110,9 @@ return [
         'cron' => true,
         'url_fetch' => true,
         'smtp' => true,
+        // Recipient probing also depends on validation.smtp_probing below. This
+        // flag is the operator's switch; that one is the deployment's ceiling.
+        'smtp_validation' => true,
     ],
 
     /*

@@ -414,21 +414,43 @@ driver is unsupported *or* because a supported one is configured unsafely.
 disablement and subsystem toggles. They differ only in intent, and splitting
 them would mean three places to check before allowing an operation.
 
-The three registered subsystems are `cron`, `url_fetch` and `smtp`, matching
-the defaults in `sender.subsystems`. A flag exists only for a subsystem that
-exists today; none are added speculatively. Each maps to the capability it
-depends on, which is why `storage` is not a subsystem: it is measured as a
-capability but is not operator-switchable.
+The registered subsystems are `cron`, `url_fetch`, `smtp` and `smtp_validation`,
+matching the defaults in `sender.subsystems`. A flag exists only for a subsystem
+that exists today; none are added speculatively. Three of them map to the
+capability they depend on, which is why `storage` is not a subsystem: it is
+measured as a capability but is not operator-switchable.
 
 Flags are stored in `system_settings`, not the cache, because a cache-cleared
 kill switch that silently re-enables a subsystem is worse than no kill switch
-at all.
+at all. The surface is `/admin/system/subsystems`, gated on `system.manage`.
 
-**There is no operator surface yet.** `enable()`, `disable()` and `reset()` are
-reachable only from tests, and `system.manage` is used by no route or command.
-The mechanism is in place; the control panel that exposes it is deferred to the
-admin operations centre, or to Stage 3 if the job engine needs an emergency
-stop sooner.
+**A subsystem may have no capability subject, and that is not a missing
+measurement.** `smtp_validation` has none. Establishing whether the host permits
+outbound port 25 would mean dialling a mail server from a diagnostic command,
+which is the exact behaviour the flag exists to prevent — so the platform
+declines to measure it and the subsystem is decided by the operator switch and
+the deployment ceiling alone. `Availability` therefore carries a nullable
+capability, and a null there must not be read as a weak `READY`: it means the
+question was never asked.
+
+### Two controls compose as an AND, never a preference
+
+Recipient SMTP probing is the one place where the environment and the operator
+both hold a switch, and the composition is worth stating because the alternative
+is the dangerous one:
+
+```text
+effective = deployment ceiling AND operator switch
+```
+
+The ceiling is `SENDER_VALIDATION_SMTP_PROBING`. The operator switch is the
+persisted flag above. An operator may stop probing with no deploy; an operator
+may **not** raise a ceiling the deployment has set, because the application
+cannot distinguish a mistake from an intention to try anyway. `SmtpProbingPolicy`
+composes the two in one place so no call site re-derives it, and it asks nothing
+about entitlement: a safety control over the host's outbound traffic must not
+depend on a commercial decision, or an unentitled installation would have no way
+to switch probing off at all.
 
 ### Entitlement fails closed
 

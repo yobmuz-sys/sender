@@ -12,6 +12,7 @@ use App\Domain\Audience\MailboxSmtpValidator;
 use App\Domain\Audience\MailboxValidationCache;
 use App\Domain\Audience\MailRouteResolver;
 use App\Domain\Audience\RecipientProber;
+use App\Domain\Audience\SmtpProbingPolicy;
 use App\Domain\Audience\SmtpRecipientProber;
 use App\Domain\Audience\SyntaxValidator;
 use App\Domain\Audience\ValidationPipeline;
@@ -24,6 +25,7 @@ use App\Domain\System\Capabilities\CapabilityRegistry;
 use App\Domain\System\Contracts\HostInspector;
 use App\Domain\System\Entitlements\DenyAllEntitlement;
 use App\Domain\System\Entitlements\Entitlement;
+use App\Domain\System\Flags\SubsystemFlagRegistry;
 use App\Domain\System\Mail\SmtpCapability;
 use App\Domain\System\Network\UrlFetchCapability;
 use App\Domain\System\Runs\RunObserver;
@@ -135,7 +137,7 @@ class AppServiceProvider extends ServiceProvider
             $app->make(MailboxSmtpValidator::class),
             $app->make(DomainValidationCache::class),
             $app->make(MailboxValidationCache::class),
-            (bool) config('sender.validation.smtp_probing', false),
+            SmtpProbingPolicy::fromEnvironment($app->make(SubsystemFlagRegistry::class))->enabled(),
             (int) config('sender.validation.catch_all_cache_ttl_seconds', 259200),
         ));
     }

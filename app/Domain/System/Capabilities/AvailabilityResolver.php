@@ -42,11 +42,18 @@ final class AvailabilityResolver
     {
         $feature ??= $subsystem->value;
 
-        $capability = $this->capabilities->status($subsystem->subject());
+        // A null subject means this subsystem has no measurable host dependency,
+        // so the capability dimension is absent rather than unknown. Only the
+        // flag and the entitlement are consulted, and the decision is not
+        // downgraded to Unverified on the strength of a question nobody asked.
+        $capability = ($subject = $subsystem->subject()) !== null
+            ? $this->capabilities->status($subject)
+            : null;
+
         $enabled = $this->flags->enabled($subsystem);
         $entitlement = $this->entitlement->status($feature);
 
-        if ($capability->isUnavailable()) {
+        if ($capability?->isUnavailable()) {
             return new Availability(
                 AvailabilityState::Blocked,
                 AvailabilityReason::CapabilityUnavailable,
@@ -57,7 +64,7 @@ final class AvailabilityResolver
             );
         }
 
-        if (! $enabled) {
+        if (! $enabled || ! $subsystem->deploymentAllows()) {
             return new Availability(
                 AvailabilityState::Blocked,
                 AvailabilityReason::SubsystemDisabled,
