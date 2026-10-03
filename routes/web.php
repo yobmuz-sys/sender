@@ -262,6 +262,12 @@ Route::middleware(['auth', 'confirmed'])->group(function (): void {
         Route::post('{campaign}/pause', [CampaignController::class, 'pause'])->name('pause');
         Route::post('{campaign}/resume', [CampaignController::class, 'resume'])->name('resume');
         Route::post('{campaign}/cancel', [CampaignController::class, 'cancel'])->name('cancel');
+
+        // The confirmation page for cancelling. A GET, because showing somebody
+        // what they are about to do is a read, and a POST because the decision
+        // that follows is a change nobody should be able to make by following a
+        // link out of an email.
+        Route::get('{campaign}/cancel', [CampaignController::class, 'confirmCancel'])->name('confirmCancel');
     });
 
     // `/suppression` is a real page as of Stage 5B. There is deliberately no

@@ -6,9 +6,12 @@ namespace App\Http\Controllers\Campaigns;
 
 use App\Domain\Campaigns\AudienceSnapshot;
 use App\Domain\Campaigns\Campaign;
+use App\Domain\Campaigns\CampaignIndex;
+use App\Domain\Campaigns\CampaignIndexFilters;
 use App\Domain\Campaigns\CampaignLauncher;
 use App\Domain\Campaigns\CampaignPreflight;
 use App\Domain\Campaigns\CampaignStatus;
+use App\Domain\Campaigns\CampaignSummary;
 use App\Domain\Mail\SmtpAccount;
 use App\Domain\Templates\Template;
 use App\Http\Controllers\Controller;
@@ -49,17 +52,50 @@ class CampaignController extends Controller
      */
     private const RECIPIENTS_PER_PAGE = 50;
 
-    public function index(Request $request): View
+    /**
+     * The campaign list.
+     *
+     * Deliberately does almost nothing itself. It asks {@see CampaignIndex} for a
+     * page, for the state counts and for the transports to filter by, and hands
+     * them to a view. Eligibility, suppression, preflight and state transitions
+     * belong to the domain types that already own them, and a list page that
+     * restated any of them would be a second copy that could disagree with the
+     * page that actually decides whether a campaign may send.
+     *
+     * Ownership is applied by the query, before anything is counted, so there is no
+     * version of this page that can see another tenant's campaigns.
+     */
+    public function index(Request $request, CampaignIndex $index): View
     {
-        $campaigns = Campaign::query()
-            ->ownedBy((int) $request->user()->id)
-            ->with(['template', 'list', 'smtpAccount'])
-            ->withCount('recipients')
-            ->orderByDesc('updated_at')
-            ->paginate(25);
+        $filters = CampaignIndexFilters::fromRequest($request);
+        $campaigns = $index->paginateFor($request->user(), $filters);
 
         return view('campaigns.index', [
             'campaigns' => $campaigns,
+            'filters' => $filters,
+            'statuses' => CampaignStatus::cases(),
+            'accounts' => $index->accountsFor($request->user()),
+            'statusCounts' => $index->statusCountsFor($request->user()),
+        ]);
+    }
+
+    /**
+     * Ask before cancelling.
+     *
+     * Cancelling cannot be undone, so it is not a button on a list of twenty-five
+     * rows. This page says what stopping means for *this* campaign — how many
+     * messages have already gone out and will not be recalled, and how many are
+     * still waiting — and only here is there a button that does it.
+     */
+    public function confirmCancel(Request $request, mixed $campaign = null): View
+    {
+        $record = $this->owned($request, $campaign);
+
+        abort_if(! $record->status->allowsCancel(), 409);
+
+        return view('campaigns.cancel', [
+            'campaign' => $record,
+            'counts' => $record->recipientCounts(),
         ]);
     }
 
@@ -145,9 +181,16 @@ class CampaignController extends Controller
     {
         $record = $this->owned($request, $campaign);
 
+        $counts = $record->recipientCounts();
+
         return view('campaigns.show', [
             'campaign' => $record,
             'preflight' => $preflight,
+
+            // The same read model the list builds, from the counts this page has
+            // already fetched, so the action buttons here and in the list are
+            // decided by one piece of code.
+            'summary' => CampaignSummary::of($record, $counts),
 
             // Answered whatever the state, not only once launched. A draft's
             // blockers are the most useful thing on the page — they are why the
@@ -155,7 +198,7 @@ class CampaignController extends Controller
             // again so it is obvious that later changes to a template or a
             // transport do not alter what is already going out.
             'report' => $preflight->reportFor($record),
-            'counts' => $record->recipientCounts(),
+            'counts' => $counts,
             'recipients' => $record->recipients()
                 ->with('contact')
                 ->orderBy('id')

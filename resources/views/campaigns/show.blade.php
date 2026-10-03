@@ -6,9 +6,15 @@
 
     <x-page-header :title="$campaign->name" :description="$campaign->status->explanation()">
         <x-slot:actions>
-            @if ($campaign->status->allowsConfigurationEdit())
-                <x-button variant="secondary" :href="route('campaigns.edit', $campaign)">Edit</x-button>
-            @endif
+            {{-- Pause, resume and cancel come from the same read model the list uses,
+                 so this page cannot offer a button the list hides or the platform
+                 would refuse. Start and send-now are campaign-page actions: they
+                 put messages on the wire, so they are not offered from a list of
+                 twenty-five rows. --}}
+            @include('campaigns.partials.actions', [
+                'summary' => $summary,
+                'campaign' => $campaign,
+            ])
 
             @if ($campaign->status->allowsStart())
                 <form method="POST" action="{{ route('campaigns.start', $campaign) }}">
@@ -24,27 +30,6 @@
                         <x-button variant="secondary" type="submit">Send now instead</x-button>
                     </form>
                 @endif
-            @endif
-
-            @if ($campaign->status->allowsPause())
-                <form method="POST" action="{{ route('campaigns.pause', $campaign) }}">
-                    @csrf
-                    <x-button type="submit">Pause</x-button>
-                </form>
-            @endif
-
-            @if ($campaign->status->allowsResume())
-                <form method="POST" action="{{ route('campaigns.resume', $campaign) }}">
-                    @csrf
-                    <x-button type="submit">Resume</x-button>
-                </form>
-            @endif
-
-            @if ($campaign->status->allowsCancel())
-                <form method="POST" action="{{ route('campaigns.cancel', $campaign) }}">
-                    @csrf
-                    <x-button variant="danger" type="submit">Cancel</x-button>
-                </form>
             @endif
 
             <x-button variant="secondary" :href="route('campaigns.index')">All campaigns</x-button>
@@ -96,22 +81,15 @@
         </div>
 
         @if ($counts['total'] > 0)
-            @php
-                $settled = $counts['total'] - $campaign->remainingCount();
-                $percent = (int) round(($settled / $counts['total']) * 100);
-            @endphp
-
             <x-card title="Progress">
-                <div class="flex items-center gap-3">
-                    <div class="h-2 flex-1 rounded-full bg-slate-100">
-                        <div class="h-2 rounded-full bg-slate-800" style="width: {{ $percent }}%"></div>
-                    </div>
-
-                    <span class="text-sm text-slate-700">{{ $percent }}%</span>
-                </div>
+                {{-- The same bar the list uses, over the same definition of
+                     "dealt with", so the percentage on a row and the percentage
+                     here are the same number rather than two calculations that
+                     happen to agree today. --}}
+                <x-progress-bar :progress="$summary->progress" />
 
                 <p class="mt-2 text-xs text-slate-500">
-                    {{ number_format($settled) }} of {{ number_format($counts['total']) }} recipients have been
+                    {{ number_format($summary->progress->settled()) }} of {{ number_format($counts['total']) }} recipients have been
                     dealt with: sent, failed, skipped or blocked. Blocked recipients are people who asked not to
                     be contacted before their turn came up, so nothing was sent to them.
                 </p>

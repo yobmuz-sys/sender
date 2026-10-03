@@ -707,6 +707,43 @@ customer's HTML, a preview rendered in a sandboxed frame, and a version counter
 that increments only when content actually changes. `Template::snapshot()` is the
 contract the campaign stage consumes.
 
+### The campaign list is a read model, not a second domain
+
+`/campaigns` is where a customer finds out what is happening, so its two hard
+requirements are arithmetic and isolation, and neither is a rule of its own:
+
+- **Every figure is a count of recipient rows that exist.** The per-status counts
+  are correlated subqueries selected in the same statement as the page of campaigns,
+  so the screen costs the same number of queries whether the account has two
+  campaigns or two hundred. No per-row query, and no estimate derived from a status
+  column.
+- **Progress is terminal recipients, not sent ones.** A campaign where 4,000 of
+  5,000 were sent and 900 were refused is 98% done, and a bar counting only
+  successful sends would say 80% when the worker had nothing left to send. The
+  numerator is whatever `CampaignRecipientStatus::isTerminal()` calls finished —
+  the same answer the campaign page gives to "is this over" — and a draft has no
+  percentage at all, because an audience frozen at launch is the denominator and a
+  draft has not frozen one.
+- **The header counts the whole tenant; the list obeys the filters.** A summary
+  that changed when you searched would be answering a different question than it
+  appears to. The page says so, and says how many campaigns matched.
+- **Ordering is operational.** Sending, stopped by a problem, paused, waiting,
+  drafts, then work that is over. The lifecycle order is right for the figures
+  along the top and wrong for a list a customer opens to find what is moving.
+- **Actions are read off the status, in one place.** `CampaignSummary::actions()`
+  is used by the list *and* by the campaign's own page, so the two cannot offer
+  different buttons for the same state. Two consequences are deliberate and depart
+  from the original brief: a *scheduled* campaign cannot be paused, because it has
+  sent nothing to pause and resuming it would throw away the start time the
+  customer chose; and cancelling is a link to a confirmation page rather than a
+  button in a column of twenty-five rows, because it is the one action on this page
+  that cannot be undone.
+
+Filters are search by name or frozen subject, status, and sending account — each
+either a real value or absent, so a hand-edited URL cannot produce a page that
+silently matches nothing. Date filtering, and any notion of bounce or open
+analytics, wait for the data those features would need.
+
 ### A campaign is a frozen sending job
 
 The invariant the whole stage is arranged around:

@@ -69,7 +69,7 @@
                         </p>
                     @endif
 
-                    <x-task-progress :progress="$taskProgress" class="mt-2" />
+                    <x-progress-bar :progress="$taskProgress" class="mt-2" />
 
                     @if ($extraction->validation_processed_count > 0)
                         <dl class="mt-3 space-y-1 border-t border-slate-100 pt-3 text-sm">

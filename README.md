@@ -93,12 +93,13 @@ of them should be "fixed" by weakening a threshold or a check.
 6. **Run evidence is a record of outcomes, not a progress model.** Runs are
    deliberately minimal: no chunking, progress or dependency graph. Those belong
    to the workload that needs them.
-7. **Placeholder pages carry no behaviour.** Features, plans, the administrative
-   campaigns page, API, billing and audit are rendered as explicit "not yet
-   available" shells. They query no domain table, because no such table exists yet
-   and inventing one would fabricate a dependency. The *customer* campaign pages
-   are real as of Stage 5C: a campaign freezes its message and its audience at
-   launch and sends them from a bounded worker.
+7. **Placeholder pages carry no behaviour.** Features, plans, files, analytics, the
+   administrative campaigns page, API, billing and audit are rendered as explicit
+   "not yet available" shells. They query no domain table, because no such table
+   exists yet and inventing one would fabricate a dependency. The *customer*
+   campaign pages are real as of Stage 5C: a campaign freezes its message and its
+   audience at launch and sends them from a bounded worker, and the list counts what
+   its recipient rows say rather than estimating from a status column.
 8. **One URL per extraction, and no query string.** `source_type` is `paste` or
    `url`; a URL extraction fetches exactly one address. `source_ref` is stored
    without its query string, because it is both what the worker fetches and
@@ -702,7 +703,11 @@ a confirmed address.
 | `/account/smtp`, `/account/smtp/create`, `/account/smtp/{account}`, `/{account}/edit` | Your SMTP transports |
 | `/account/smtp/{account}/verify`, `/send-test` | Verification actions, rate limited |
 | `/account/deliverability` | Sending health and readiness findings |
-| `/files`, `/templates`, `/campaigns`, `/analytics` | Product surfaces — staged shells, see the limitation above |
+| `/templates`, `/templates/new`, `/templates/{template}`, `/{template}/edit` | Message templates: reusable content, versioned, with a sandboxed preview |
+| `/campaigns` | Campaign list: state counts, filters, progress counted from recipient rows |
+| `/campaigns/new`, `/campaigns/{campaign}`, `/{campaign}/edit` | Prepare a campaign: template, audience, transport, pace, checks |
+| `/campaigns/{campaign}/start`, `/send-now`, `/pause`, `/resume`, `/cancel` | State changes, all POST. Cancelling is confirmed on its own page first |
+| `/files`, `/analytics` | Product surfaces — staged shells, see the limitation above |
 
 ### Administration
 

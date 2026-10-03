@@ -3,9 +3,14 @@
 {{--
     The progress bar.
 
-    Rendered only when a real denominator exists. A bar over "0 of 0" or over a
-    list nobody has begun checking would be a percentage of nothing, and the
-    whole point of TaskProgress is that it can say so — see hasDenominator().
+    Shared by anything with a real denominator, which is currently two unrelated
+    things: an extraction being checked and a campaign being sent. It renders only
+    when that thing can state a percentage, and says why it cannot when it cannot —
+    see TaskProgress::hasDenominator() and CampaignProgress::hasDenominator().
+
+    The contract is deliberately two methods and a label: hasDenominator(),
+    percent() and label() returning {title, detail}. Anything more specific would
+    have put one domain's rules in the middle of the other's screen.
 --}}
 @if ($progress?->hasDenominator())
     @php($percent = $progress->percent())

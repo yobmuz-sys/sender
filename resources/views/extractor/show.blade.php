@@ -58,7 +58,7 @@
         </x-alert>
     @endif
 
-    <x-task-progress :progress="$progress" class="mb-6" />
+    <x-progress-bar :progress="$progress" class="mb-6" />
 
     {{-- The headline. "Ready to use" rather than "ready to send": there is no
          Send button in this stage, because consent and suppression have not been
